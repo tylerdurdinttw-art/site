@@ -2,7 +2,6 @@
 
 import { useCallback, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
 import { Check, Eye, EyeOff, MailCheck } from 'lucide-react';
 import { APP_NAME } from '@/lib/brand';
 import { checkEmail, checkLogin, checkPassword } from '@/lib/authShared';
@@ -94,8 +93,6 @@ export default function AuthForm({
   /** Куда вернуть после входа — путь, с которого middleware увело на эту страницу. */
   next: string;
 }) {
-  const router = useRouter();
-
   const [mode, setMode] = useState<Mode>('login');
   const [login, setLogin] = useState(rememberedLogin);
   const [email, setEmail] = useState('');
@@ -208,15 +205,19 @@ export default function AuthForm({
         return;
       }
 
-      router.replace(next);
-      router.refresh();
+      // Полная перезагрузка, а не router.replace: клиентский кеш роутера мог
+      // запомнить, что «/» уводит на /login (middleware отправляло туда гостя),
+      // и после входа отдал бы этот же ответ — внешне «кнопка ничего не делает».
+      // Заодно сервер отрисовывает сайдбар и разделы сразу с новой сессией.
+      window.location.assign(next);
+      return;
     } catch (err) {
       console.error(err);
       setError('Панель не отвечает. Попробуйте ещё раз.');
     } finally {
       setBusy(false);
     }
-  }, [busy, mode, readFields, remember, next, router]);
+  }, [busy, mode, readFields, remember, next]);
 
   const resend = useCallback(async (address: string) => {
     setBusy(true);
