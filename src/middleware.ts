@@ -1,13 +1,19 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import { SESSION_COOKIE } from '@/lib/authShared';
-import { unpackCookie } from '@/lib/sessionCookie';
+import { sessionCookieLooksValid } from '@/lib/sessionCookie';
 
 /**
- * Единственная дверь в панель.
+ * Единственная дверь в панель — но дверь неохраняемая.
  *
- * Здесь проверяется только подпись и срок куки — в базу middleware не ходит,
- * оно исполняется в edge-рантайме, где prisma недоступна. Что сессия ещё жива,
- * проверяет getCurrentUser() уже на странице или в обработчике.
+ * Middleware исполняется в edge-рантайме: сюда не доходят ни prisma, ни
+ * переменные окружения (в edge-код они подставляются на сборке, а не при
+ * запуске). Поэтому проверить подпись куки ключом AUTH_SECRET здесь нельзя —
+ * попытка это делать заканчивалась тем, что подпись не сходилась никогда
+ * и живые сессии умирали на первом же переходе.
+ *
+ * Отсюда роль скромная: увести гостя на форму входа, чтобы он не смотрел на
+ * пустые экраны. Пускать или нет — решают getCurrentUser() и requireApiUser()
+ * в Node-рантайме: они сверяют и подпись, и строку в таблице sessions.
  */
 
 /** Страницы, открытые всем: без них не войти и не подтвердить почту. */
@@ -31,8 +37,9 @@ export async function middleware(req: NextRequest) {
   const { pathname, search } = req.nextUrl;
   if (isPublic(pathname)) return NextResponse.next();
 
-  const session = await unpackCookie(req.cookies.get(SESSION_COOKIE)?.value);
-  if (session) return NextResponse.next();
+  if (sessionCookieLooksValid(req.cookies.get(SESSION_COOKIE)?.value)) {
+    return NextResponse.next();
+  }
 
   if (pathname.startsWith('/api/')) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
@@ -44,10 +51,10 @@ export async function middleware(req: NextRequest) {
   // Куда пользователь шёл — вернём его туда после входа.
   if (pathname !== '/') url.searchParams.set('next', `${pathname}${search}`);
 
-  const res = NextResponse.redirect(url);
-  // Кука не прошла проверку — гасим её, чтобы не гонять по кругу.
-  res.cookies.delete(SESSION_COOKIE);
-  return res;
+  // Куку намеренно не трогаем: решение здесь принимается без проверки подписи,
+  // и удалять по нему живую сессию было бы слишком самонадеянно. Просроченные
+  // подчистит pruneExpired() при следующем входе.
+  return NextResponse.redirect(url);
 }
 
 export const config = {

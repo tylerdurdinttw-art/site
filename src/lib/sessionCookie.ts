@@ -78,6 +78,29 @@ export interface CookiePayload {
   expiresAt: number;
 }
 
+/**
+ * Беглая проверка без криптографии: на месте ли форма куки и не вышел ли срок.
+ *
+ * Ничего не доказывает — такую строку подделает кто угодно. Нужна middleware,
+ * которое живёт в edge-рантайме: ключ AUTH_SECRET туда не попадает (переменные
+ * окружения подставляются в edge-код на сборке, а не при запуске), и требовать
+ * там подпись значило бы рубить все живые сессии.
+ *
+ * Настоящая проверка — подпись плюс строка в таблице sessions — идёт дальше,
+ * в getCurrentUser() и requireApiUser(), уже в Node-рантайме. Пройти middleware
+ * с выдуманной кукой можно, получить по ней данные — нет.
+ */
+export function sessionCookieLooksValid(raw: string | undefined): boolean {
+  if (!raw) return false;
+
+  const parts = raw.split('.');
+  if (parts.length !== 4) return false;
+  if (!parts[0] || !parts[1] || !parts[3]) return false;
+
+  const expiresAt = Number(parts[2]);
+  return Number.isFinite(expiresAt) && expiresAt > Date.now();
+}
+
 export async function packCookie(payload: CookiePayload): Promise<string> {
   const body = `${payload.sid}.${payload.secret}.${payload.expiresAt}`;
   const signature = await crypto.subtle.sign('HMAC', await hmacKey(), encoder.encode(body));
