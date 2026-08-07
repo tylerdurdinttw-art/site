@@ -1,0 +1,33 @@
+# зависимости
+node_modules/
+.pnp
+.pnp.js
+
+# сборки
+.next/
+.next-dev/
+out/
+build/
+dist/
+*.tsbuildinfo
+next-env.d.ts
+
+# окружение
+.env
+.env.local
+.env.*.local
+
+# базы MaxMind — качаются вручную, в репозиторий не кладутся
+geoip/*.mmdb
+
+# логи и мусор
+*.log
+npm-debug.log*
+yarn-error.log*
+.pm2/
+.DS_Store
+Thumbs.db
+
+# редакторы
+.vscode/
+.idea/

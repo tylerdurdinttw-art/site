@@ -1,0 +1,555 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum ClientType {
+  licensed
+  pirate
+}
+
+enum EmailTokenType {
+  verify
+  reset
+}
+
+enum PlayerStatus {
+  online
+  sleeping
+  offline
+}
+
+enum CommandStatus {
+  pending
+  sent
+  acked
+}
+
+enum CheckStatus {
+  active
+  finished
+}
+
+/// Учётная запись панели. Вход по логину или почте, пароль лежит только хэшем.
+model User {
+  id    String @id @default(cuid())
+  /// Логин для входа. Уникален без учёта регистра — храним в нижнем.
+  login String @unique
+  /// Почта для входа и подтверждения. Тоже в нижнем регистре.
+  email String @unique
+  /// scrypt: "scrypt$<N>$<r>$<p>$<saltBase64>$<keyBase64>", см. lib/password.ts
+  passwordHash String
+
+  /// Момент подтверждения почты. null — письмо ещё не открыли, вход закрыт.
+  emailVerifiedAt DateTime?
+
+  /// owner — первая зарегистрированная учётка, у неё полный доступ.
+  role String @default("owner")
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  sessions Session[]
+  tokens   EmailToken[]
+
+  @@map("users")
+}
+
+/// Живая сессия входа. Кука хранит id и подпись, сам токен — только хэшем.
+model Session {
+  /// Случайный идентификатор сессии, он же попадает в куку.
+  id String @id
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// sha256 от секретной части куки: утечка базы не даёт войти под чужой сессией.
+  tokenHash String
+
+  /// Отмечена ли галочка «запомнить меня» — от неё зависит срок жизни куки.
+  remember Boolean @default(false)
+
+  userAgent String?
+  ip        String?
+
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("sessions")
+}
+
+/// Одноразовая ссылка из письма: подтверждение почты и сброс пароля.
+model EmailToken {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  type EmailTokenType @default(verify)
+  /// sha256 от токена из ссылки — в базе открытого значения нет.
+  tokenHash String @unique
+
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([userId, type])
+  @@index([expiresAt])
+  @@map("email_tokens")
+}
+
+model Server {
+  id           String @id // "rust-1"
+  name         String // "Rust #1 [ X1000000 | NOLIMIT ]"
+  hostname     String?
+  maxPlayers   Int?
+  uptimeSec    Int?
+  /// Из heartbeat: сколько игроков сейчас в очереди и сколько в процессе подключения.
+  queuedPlayers  Int @default(0)
+  joiningPlayers Int @default(0)
+  /// World.Seed и World.Size текущего вайпа — по ним ищется карта на rustmaps.
+  seed      Int?
+  worldSize Int?
+  /// X-Server-Key, приходит от плагина
+  serverKey    String @unique
+  /// секрет для HMAC-SHA256 подписи тела запроса
+  serverSecret String
+
+  lastHeartbeatAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+
+  players   Player[]
+  sessions  PlayerSession[]
+  events    PlayerEvent[]
+  reports   Report[]
+  violations Violation[]
+  bans      Ban[]
+  commands  ServerCommand[]
+  checks    PlayerCheck[]
+
+  @@map("servers")
+}
+
+model Player {
+  id       String @id @default(cuid())
+  steamId  String @unique
+  name     String
+
+  clientType ClientType   @default(pirate)
+  status     PlayerStatus @default(offline)
+
+  serverId String?
+  server   Server? @relation(fields: [serverId], references: [id], onDelete: SetNull)
+
+  ip    String?
+  ping  Int     @default(0)
+  isAfk Boolean @default(false)
+
+  /// Размер команды из RelationshipManager: 1 — соло, 2 — дуо, 3 — трио, 4 — сквад, 5+ — клан.
+  teamSize Int @default(1)
+  /// Язык клиента ("ru", "en", …) — из lang.GetLanguage на игровом сервере.
+  language String?
+  /// Дискорд, который игрок назвал командой /ds после вызова на проверку.
+  discord String?
+  /// Когда панель последний раз вызывала игрока на проверку.
+  checkRequestedAt DateTime?
+
+  /// ownerid из CanClientLogin: если != steamId — семейный доступ / аренда аккаунта
+  ownerSteamId  String?
+  isFamilyShare Boolean @default(false)
+  authLevel     Int     @default(0)
+
+  reportsCount Int @default(0)
+
+  /// сколько heartbeat подряд игрок отсутствовал; 2+ => offline
+  missedHeartbeats Int @default(0)
+
+  lastSeenAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  sessions   PlayerSession[]
+  events     PlayerEvent[]
+  violations Violation[]
+  checks     PlayerCheck[]
+
+  @@index([status])
+  @@index([serverId])
+  @@map("players")
+}
+
+model PlayerSession {
+  id       String @id @default(cuid())
+  playerId String
+  player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  steamId  String
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  ip String
+
+  startedAt   DateTime  @default(now())
+  endedAt     DateTime?
+  durationSec Int?
+
+  @@index([ip])
+  @@index([steamId])
+  @@index([startedAt])
+  @@map("player_sessions")
+}
+
+model PlayerEvent {
+  id String @id @default(cuid())
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  steamId  String?
+
+  type    String
+  payload Json
+
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([type])
+  @@map("player_events")
+}
+
+model Report {
+  id String @id @default(cuid())
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  reporterSteamId String
+  reporterName    String?
+  targetSteamId   String
+  targetName      String?
+
+  subject String?
+  message String?
+  type    String?
+
+  createdAt DateTime @default(now())
+
+  @@index([targetSteamId])
+  @@index([createdAt])
+  @@map("reports")
+}
+
+model Violation {
+  id String @id @default(cuid())
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  steamId  String
+
+  /// Speedhack | Flyhack | InsideTerrain | NoClip | firerate | headshot_ratio | ...
+  type   String
+  amount Float  @default(0)
+  count  Int    @default(1)
+
+  createdAt DateTime @default(now())
+
+  @@index([steamId])
+  @@index([createdAt])
+  @@map("violations")
+}
+
+model IpInfo {
+  ip      String  @id
+  isp     String?
+  city    String?
+  country String?
+
+  /// Похож ли адрес на VPN/хостинг — вывод по названию организации ASN (см. lib/vpn.ts).
+  isVpn Boolean @default(false)
+  /// Что именно сработало в названии организации; null — совпадений нет.
+  vpnReason String?
+
+  fetchedAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([expiresAt])
+  @@map("ip_info")
+}
+
+/// Кеш публичных данных Steam Web API: часы в Rust и блокировки.
+/// Обновляется по TTL, ключ берётся из STEAM_API_KEY; без ключа таблица остаётся пустой.
+model SteamProfile {
+  steamId     String  @id
+  personaName String?
+  avatarUrl   String?
+
+  /// Наиграно в Rust (appid 252490), минут. null — профиль закрыт или игра скрыта.
+  rustMinutes Int?
+  /// Наиграно в Rust за две недели, минут. Steam отдаёт его только по активным игрокам.
+  rustMinutes2Weeks Int?
+
+  /// communityvisibilitystate из GetPlayerSummaries: 1 — закрыт, 3 — открыт.
+  visibility Int?
+  /// timecreated из GetPlayerSummaries — когда создан аккаунт Steam.
+  accountCreatedAt DateTime?
+
+  vacBanned   Boolean @default(false)
+  vacBanCount Int     @default(0)
+  /// Игровые баны Steam. Для Rust игровой бан — это бан EAC.
+  gameBanCount Int    @default(0)
+  /// Дней с последнего бана; Steam отдаёт одно число и на VAC, и на игровой бан.
+  daysSinceLastBan Int?
+
+  /// Текст последней ошибки запроса; при успехе — null.
+  lastError String?
+
+  fetchedAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@map("steam_profiles")
+}
+
+model Ban {
+  id String @id @default(cuid())
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  steamId String
+  name    String?
+  ip      String?
+  reason  String?
+
+  /// Кто выдал бан. «Панель» — бан поставлен из панели по итогу проверки;
+  /// null — бан пришёл из игры (консоль, другой плагин), автора там не узнать.
+  admin String?
+
+  active     Boolean   @default(true)
+  createdAt  DateTime  @default(now())
+  unbannedAt DateTime?
+
+  @@index([steamId])
+  @@index([active])
+  @@index([createdAt])
+  @@map("bans")
+}
+
+/// Кеш карт с rustmaps: ключ — пара seed + размер мира.
+/// Картинка скачивается один раз и дальше отдаётся из базы, наружу панель больше не ходит.
+model RustMapImage {
+  key       String @id // "<seed>_<size>"
+  seed      Int
+  worldSize Int
+
+  /// Ссылка на оригинал у rustmaps — держим для справки
+  imageUrl    String?
+  contentType String  @default("image/png")
+  image       Bytes?
+
+  /// rustmaps пометил карту кастомной: по seed+size она не воспроизводится
+  isCustom Boolean @default(false)
+  /// Текст последней ошибки, если карту получить не удалось
+  lastError String?
+
+  fetchedAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@map("rustmaps_images")
+}
+
+/// Запасной вариант, если rustmaps недоступен: сетка высот, снятая плагином с террейна.
+/// Картинку из неё рисует браузер на canvas — на сервере изображения не собираются.
+model ServerMap {
+  serverId   String @id
+  /// World.Seed и World.Size — по ним понятно, что карта от текущего вайпа
+  seed       Int
+  worldSize  Int
+  /// сторона сетки в сэмплах (256/512/…)
+  resolution Int
+  /// высоты в метрах, к которым нормализованы байты
+  minHeight  Float
+  maxHeight  Float
+  /// resolution * resolution байт, построчно с юга на север
+  heights    Bytes
+
+  updatedAt DateTime @updatedAt
+  createdAt DateTime @default(now())
+
+  @@map("server_maps")
+}
+
+/// Одноразовый код подключения сервера: панель показывает его в UI,
+/// плагин обменивает на serverId/serverKey/serverSecret командой в консоли.
+model PairingCode {
+  code      String    @id
+  createdAt DateTime  @default(now())
+  expiresAt DateTime
+  usedAt    DateTime?
+  /// До обмена — сервер, к которому код привязан (переподключение: ключи
+  /// перевыдаются этой записи). После обмена — сервер, который код создал.
+  serverId  String?
+
+  @@index([expiresAt])
+  @@map("pairing_codes")
+}
+
+/// Ключевые слова, по которым подсвечиваются сообщения в чате.
+model ChatKeyword {
+  id        String   @id @default(cuid())
+  word      String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("chat_keywords")
+}
+
+/// Настройки панели вида ключ-значение (цвет пометки чата и т.п.).
+model PanelSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("panel_settings")
+}
+
+/// Проверка игрока: пока она активна, панель держит с ним отдельный приватный чат.
+/// Завершение закрывает чат и снимает баннер с экрана игрока.
+model PlayerCheck {
+  id String @id @default(cuid())
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  playerId String?
+  player   Player? @relation(fields: [playerId], references: [id], onDelete: SetNull)
+  steamId  String
+  /// Ник на момент вызова — чтобы шапка чата не пустела, если игрока удалили.
+  name     String
+
+  /// Кто вызвал на проверку. Пока в панели нет авторизации — всегда «Панель».
+  admin String?
+
+  status CheckStatus @default(active)
+
+  /// Висит ли сейчас на экране игрока баннер «ВЫ ВЫЗВАНЫ НА ПРОВЕРКУ».
+  bannerVisible Boolean @default(false)
+
+  /// Исход: ban | team_ban | passed | cancelled. Заполняется при завершении.
+  outcome String?
+  reason  String?
+
+  startedAt  DateTime  @default(now())
+  finishedAt DateTime?
+
+  messages CheckMessage[]
+
+  @@index([status])
+  @@index([steamId])
+  @@map("player_checks")
+}
+
+/// Сообщение приватного чата проверки.
+model CheckMessage {
+  id String @id @default(cuid())
+
+  checkId String
+  check   PlayerCheck @relation(fields: [checkId], references: [id], onDelete: Cascade)
+
+  /// panel — написал администратор, player — написал проверяемый.
+  from String
+  /// Канал исходного сообщения игрока (Global/Team/Command); у панели — null.
+  channel String?
+  text    String
+
+  createdAt DateTime @default(now())
+
+  @@index([checkId, createdAt])
+  @@map("check_messages")
+}
+
+/// Очередь команд панель -> плагин.
+model ServerCommand {
+  id String @id @default(cuid())
+
+  serverId String
+  server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
+
+  /// kick | ban | ban_team | check | check_banner | check_banner_hide | check_pm | check_end
+  type    String
+  steamId String
+  /// Для kick/ban — причина, для check/check_banner/check_pm — текст для игрока.
+  reason  String @default("")
+
+  status    CommandStatus @default(pending)
+  createdAt DateTime      @default(now())
+  sentAt    DateTime?
+  ackedAt   DateTime?
+
+  @@index([serverId, status])
+  @@map("server_commands")
+}
+
+/// Проект панели. Строка одна: панель обслуживает один проект,
+/// поэтому id зафиксирован константой SINGLETON_PROJECT_ID.
+model Project {
+  id   String @id @default("default")
+  /// Название, которое видно в шапке сайдбара.
+  name String
+  /// Часть адреса вида rustapp.io/<slug>. Латиница, цифры и дефис.
+  slug String @unique
+
+  /// Логотип лежит в базе: файлов на диске панель не держит.
+  logo     Bytes?
+  logoType String?
+
+  /// Последний пройденный шаг онбординга, 0..4. Шаг N+1 открыт, когда step >= N.
+  onboardingStep Int     @default(0)
+  /// Онбординг закрыт кнопкой «Начать работу» — сайдбар и разделы доступны.
+  onboardingDone Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  staff Staff[]
+
+  @@map("projects")
+}
+
+/// Сотрудник проекта: приглашение и набор прав.
+/// Авторизации в панели ещё нет, поэтому запись описывает приглашение,
+/// а не живую учётку — принять его будет чем, когда появится вход.
+model Staff {
+  id        String  @id @default(cuid())
+  projectId String
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  name    String
+  /// Discord, Steam или почта — как связаться с человеком.
+  contact String?
+  /// owner — создатель проекта, moderator — приглашённый.
+  role    String  @default("moderator")
+
+  /// Ключи прав из lib/permissions.ts: check, ban, unban, mute, kick, chat, reports, servers, settings.
+  permissions String[] @default([])
+
+  /// Одноразовая ссылка-приглашение.
+  inviteCode String    @unique
+  invitedAt  DateTime  @default(now())
+  acceptedAt DateTime?
+
+  @@index([projectId])
+  @@map("staff")
+}
