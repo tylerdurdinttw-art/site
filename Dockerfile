@@ -17,6 +17,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 ENV NEXT_TELEMETRY_DISABLED=1
+# Просит Next положить самодостаточный сервер в .next/standalone — см. next.config.mjs.
+# Вне Docker он не нужен и мешает: pm2 запускает панель через `next start`.
+ENV BUILD_STANDALONE=true
 # `npm run build` внутри себя дёргает prisma generate
 RUN npm run build
 

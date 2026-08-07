@@ -148,7 +148,7 @@ site/
 │       └── geo.ts                    MaxMind GeoLite2 + кеш ip_info
 ├── next.config.mjs
 ├── tailwind.config.ts
-├── Dockerfile                        многостадийная сборка на next standalone
+├── Dockerfile                        многостадийная сборка, BUILD_STANDALONE=true
 ├── docker-compose.yml                панель + PostgreSQL одной командой
 ├── ecosystem.config.js               запуск через pm2 без Docker
 └── .env.example
