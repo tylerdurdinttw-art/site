@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useMemo, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { Check, Eye, EyeOff, MailCheck } from 'lucide-react';
@@ -34,12 +34,14 @@ function Field({
 
 function PasswordField({
   id,
+  name,
   label,
   value,
   onChange,
   autoComplete,
 }: {
   id: string;
+  name: string;
   label: string;
   value: string;
   onChange: (value: string) => void;
@@ -55,6 +57,7 @@ function PasswordField({
       <div className="field mt-1.5 flex items-center gap-2 py-0 pr-2">
         <input
           id={id}
+          name={name}
           type={shown ? 'text' : 'password'}
           value={value}
           onChange={(e) => onChange(e.target.value)}
@@ -108,10 +111,29 @@ export default function AuthForm({
   /** Ссылка подтверждения, когда SMTP не настроен и письму взяться неоткуда. */
   const [manualVerify, setManualVerify] = useState<string | null>(null);
 
-  const valid = useMemo(() => {
-    if (mode === 'login') return login.trim().length > 0 && password.length > 0;
-    return !checkLogin(login) && !checkEmail(email) && !checkPassword(password);
-  }, [mode, login, email, password]);
+  const formRef = useRef<HTMLFormElement>(null);
+
+  /**
+   * Что реально введено в полях.
+   *
+   * Автозаполнение браузера подставляет значения прямо в DOM, не поднимая событий,
+   * которые видит React: состояние остаётся пустым, хотя на экране всё заполнено.
+   * Поэтому источником истины при отправке служит сама форма, а состояние —
+   * запасным вариантом.
+   */
+  const readFields = useCallback(() => {
+    const data = formRef.current ? new FormData(formRef.current) : null;
+    const pick = (name: string, fallback: string) => {
+      const value = data?.get(name);
+      return typeof value === 'string' && value ? value : fallback;
+    };
+
+    return {
+      login: pick('login', login).trim(),
+      email: pick('email', email).trim(),
+      password: pick('password', password),
+    };
+  }, [login, email, password]);
 
   const switchMode = (next: Mode) => {
     setMode(next);
@@ -122,11 +144,20 @@ export default function AuthForm({
   };
 
   const submit = useCallback(async () => {
-    if (!valid || busy) return;
+    if (busy) return;
 
-    // На регистрации те же проверки, что и на сервере: ошибку видно до запроса.
-    if (mode === 'register') {
-      const problem = checkLogin(login) ?? checkEmail(email) ?? checkPassword(password);
+    const fields = readFields();
+
+    // Проверяем при отправке, а не блокировкой кнопки: заблокированная кнопка
+    // на автозаполненной форме выглядит как сломанная — жмёшь, и ничего.
+    if (mode === 'login') {
+      if (!fields.login || !fields.password) {
+        setError('Введите логин и пароль.');
+        return;
+      }
+    } else {
+      const problem =
+        checkLogin(fields.login) ?? checkEmail(fields.email) ?? checkPassword(fields.password);
       if (problem) {
         setError(problem);
         return;
@@ -143,8 +174,8 @@ export default function AuthForm({
       const url = mode === 'login' ? '/api/auth/login' : '/api/auth/register';
       const payload =
         mode === 'login'
-          ? { login: login.trim(), password, remember }
-          : { login: login.trim(), email: email.trim(), password };
+          ? { login: fields.login, password: fields.password, remember }
+          : { login: fields.login, email: fields.email, password: fields.password };
 
       const res = await fetch(url, {
         method: 'POST',
@@ -170,7 +201,7 @@ export default function AuthForm({
 
       if (mode === 'register') {
         setSent({
-          email: body.email ?? email.trim(),
+          email: body.email ?? fields.email,
           mailSent: Boolean(body.mailSent),
           verifyUrl: body.verifyUrl,
         });
@@ -185,7 +216,7 @@ export default function AuthForm({
     } finally {
       setBusy(false);
     }
-  }, [valid, busy, mode, login, email, password, remember, next, router]);
+  }, [busy, mode, readFields, remember, next, router]);
 
   const resend = useCallback(async (address: string) => {
     setBusy(true);
@@ -290,6 +321,7 @@ export default function AuthForm({
       </p>
 
       <form
+        ref={formRef}
         className="mt-7 space-y-4"
         onSubmit={(e) => {
           e.preventDefault();
@@ -298,6 +330,7 @@ export default function AuthForm({
       >
         <Field
           id="auth-login"
+          name="login"
           label={isLogin ? 'Логин или почта' : 'Логин'}
           value={login}
           onChange={(e) => setLogin(e.target.value)}
@@ -310,6 +343,7 @@ export default function AuthForm({
         {!isLogin && (
           <Field
             id="auth-email"
+            name="email"
             label="Почта"
             type="email"
             value={email}
@@ -322,6 +356,7 @@ export default function AuthForm({
 
         <PasswordField
           id="auth-password"
+          name="password"
           label="Пароль"
           value={password}
           onChange={setPassword}
@@ -389,7 +424,7 @@ export default function AuthForm({
 
         {notice && <p className="text-[12px] text-text-muted">{notice}</p>}
 
-        <button type="submit" disabled={!valid || busy} className="btn-primary w-full">
+        <button type="submit" disabled={busy} className="btn-primary w-full">
           {busy ? 'Секунду…' : isLogin ? 'Войти' : 'Зарегистрироваться'}
         </button>
       </form>
