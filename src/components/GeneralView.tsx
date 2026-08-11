@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { Check, Copy } from 'lucide-react';
 import { Row, Section, SettingsPage } from '@/components/SettingsControls';
 import { PROJECT_URL_PREFIX } from '@/lib/brand';
+import { copyText } from '@/lib/clipboard';
 import { slugify, type ProjectState } from '@/lib/projectShared';
 
 /**
@@ -84,13 +85,9 @@ export default function GeneralView({ project }: { project: ProjectState }) {
   );
 
   const copyId = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(String(project.publicId));
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error(err);
-    }
+    if (!(await copyText(String(project.publicId)))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, [project.publicId]);
 
   return (

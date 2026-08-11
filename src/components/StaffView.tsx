@@ -3,6 +3,7 @@
 import { useCallback, useState } from 'react';
 import { Check, Copy, Loader2, Plus, Trash2 } from 'lucide-react';
 import PageTopBar from '@/components/PageTopBar';
+import { copyText } from '@/lib/clipboard';
 import { PERMISSIONS } from '@/lib/permissions';
 import type { StaffRow } from '@/lib/projectShared';
 
@@ -73,15 +74,10 @@ export default function StaffView({ initialStaff }: { initialStaff: StaffRow[] }
   };
 
   const copyInvite = async (member: StaffRow) => {
-    try {
-      await navigator.clipboard.writeText(
-        `${window.location.origin}/invite/${member.inviteCode}`,
-      );
-      setCopiedId(member.id);
-      setTimeout(() => setCopiedId(null), 2000);
-    } catch (err) {
-      console.error(err);
-    }
+    const link = `${window.location.origin}/invite/${member.inviteCode}`;
+    if (!(await copyText(link))) return;
+    setCopiedId(member.id);
+    setTimeout(() => setCopiedId(null), 2000);
   };
 
   return (

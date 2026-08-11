@@ -18,6 +18,7 @@ import {
 import { useRouter } from 'next/navigation';
 import Avatar from '@/components/Avatar';
 import IpLink from '@/components/IpLink';
+import { copyText } from '@/lib/clipboard';
 import type { PlayerDetails, PlayerStatus, TeamMode } from '@/lib/types';
 
 interface Props {
@@ -238,13 +239,9 @@ export default function PlayerModal({ steamId, onClose }: Props) {
   }, [menuOpen]);
 
   const copySteamId = useCallback(async () => {
-    try {
-      await navigator.clipboard.writeText(steamId);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error(err);
-    }
+    if (!(await copyText(steamId))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   }, [steamId]);
 
   // Проверка идёт на своей странице: сразу уводим туда — и новую, и уже начатую.

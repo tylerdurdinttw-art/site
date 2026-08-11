@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeftRight, Check, Copy, Download, FileCode2, X } from 'lucide-react';
+import { copyText } from '@/lib/clipboard';
 
 interface Props {
   projectName: string;
@@ -99,13 +100,9 @@ export default function ConnectServerModal({
 
   const copy = async () => {
     if (!command) return;
-    try {
-      await navigator.clipboard.writeText(command);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    } catch (err) {
-      console.error(err);
-    }
+    if (!(await copyText(command))) return;
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
   };
 
   return (

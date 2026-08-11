@@ -5,6 +5,7 @@ import Link from 'next/link';
 import { Check, ChevronRight, Copy, Send, UserRound } from 'lucide-react';
 import Avatar from '@/components/Avatar';
 import IpLink from '@/components/IpLink';
+import { copyText } from '@/lib/clipboard';
 import {
   CANCEL_REASONS,
   MAX_CHECK_MESSAGE_LENGTH,
@@ -682,13 +683,11 @@ export default function CheckRoom({ checkId }: { checkId: string }) {
 
   const copySteamId = useCallback(() => {
     if (!check) return;
-    void navigator.clipboard
-      .writeText(check.steamId)
-      .then(() => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 2000);
-      })
-      .catch((err) => console.error(err));
+    void copyText(check.steamId).then((ok) => {
+      if (!ok) return;
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
   }, [check]);
 
   if (notFound) {
