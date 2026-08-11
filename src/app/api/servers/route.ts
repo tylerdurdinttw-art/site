@@ -1,15 +1,16 @@
 import { NextResponse } from 'next/server';
 import { listServers } from '@/lib/overview';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** Список серверов для одноимённого раздела. */
 export async function GET() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const servers = await listServers();
+  const servers = await listServers(projectId);
   return NextResponse.json({ servers }, { headers: { 'cache-control': 'no-store' } });
 }

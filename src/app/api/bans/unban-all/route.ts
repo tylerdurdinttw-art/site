@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { queueCommand } from '@/lib/checks';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,11 +11,12 @@ export const dynamic = 'force-dynamic';
  * чтобы бан-лист игрового сервера совпал с панелью.
  */
 export async function POST() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const active = await prisma.ban.findMany({
-    where: { active: true },
+    where: { projectId, active: true },
     select: { id: true, serverId: true, steamId: true },
   });
 
@@ -35,7 +36,7 @@ export async function POST() {
     const key = `${ban.serverId}:${ban.steamId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    await queueCommand(ban.serverId, 'unban', ban.steamId, '');
+    await queueCommand(projectId, ban.serverId, 'unban', ban.steamId, '');
   }
 
   return NextResponse.json({ ok: true, unbanned: active.length });

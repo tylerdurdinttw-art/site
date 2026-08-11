@@ -1,13 +1,14 @@
 import { NextResponse } from 'next/server';
 import { getPositions } from '@/lib/positions';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function GET(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const serverId = new URL(req.url).searchParams.get('serverId');
   if (!serverId) return NextResponse.json({ error: 'serverId is required' }, { status: 400 });

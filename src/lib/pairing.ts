@@ -52,7 +52,7 @@ export function slugifyServerId(name: string): string {
  * привязан к уже существующему серверу и обмен не заводит новую запись,
  * а перевыдаёт ключи этой (см. `POST /api/pair`).
  */
-export async function createPairingCode(targetServerId?: string) {
+export async function createPairingCode(projectId: string, targetServerId?: string) {
   // Подчищаем протухшие коды, чтобы таблица не росла.
   await prisma.pairingCode.deleteMany({ where: { expiresAt: { lt: new Date() } } });
 
@@ -63,7 +63,7 @@ export async function createPairingCode(targetServerId?: string) {
     const existing = await prisma.pairingCode.findUnique({ where: { code } });
     if (existing) continue;
     return prisma.pairingCode.create({
-      data: { code, expiresAt, serverId: targetServerId ?? null },
+      data: { code, projectId, expiresAt, serverId: targetServerId ?? null },
     });
   }
 

@@ -2,20 +2,20 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { createPairingCode, normalizeCode } from '@/lib/pairing';
 import { rateLimit } from '@/lib/rateLimit';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /**
- * Выдать новый код подключения.
- *
- * Авторизации в панели на этом этапе нет, поэтому эндпоинт открыт — как и вся панель.
- * Ограничиваем частоту, чтобы кодами нельзя было забить таблицу.
+ * Выдать новый код подключения. Код привязан к проекту того, кто его запросил:
+ * сервер, обменявший код, попадёт именно в этот проект.
+ * Частоту ограничиваем, чтобы кодами нельзя было забить таблицу.
  */
 export async function POST() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const limit = rateLimit('pair:create', 20);
   if (!limit.allowed) {
@@ -25,7 +25,7 @@ export async function POST() {
     );
   }
 
-  const created = await createPairingCode();
+  const created = await createPairingCode(projectId);
 
   return NextResponse.json(
     { code: created.code, expiresAt: created.expiresAt.toISOString() },
@@ -35,14 +35,19 @@ export async function POST() {
 
 /** Состояние кода: UI опрашивает его, пока сервер не подключится. */
 export async function GET(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const raw = new URL(req.url).searchParams.get('code');
   if (!raw) return NextResponse.json({ error: 'code is required' }, { status: 400 });
 
-  const row = await prisma.pairingCode.findUnique({ where: { code: normalizeCode(raw) } });
-  if (!row) return NextResponse.json({ status: 'unknown' }, { headers: { 'cache-control': 'no-store' } });
+  const row = await prisma.pairingCode.findFirst({
+    where: { code: normalizeCode(raw), projectId },
+  });
+  if (!row) {
+    return NextResponse.json({ status: 'unknown' }, { headers: { 'cache-control': 'no-store' } });
+  }
 
   if (row.usedAt) {
     const server = row.serverId

@@ -7,9 +7,11 @@ import {
 
 export type { ModerationSettings } from '@/lib/settingsShared';
 
-/** Настройки модерации из базы. Строки нет — вернутся значения по умолчанию. */
-export async function getSettings(): Promise<ModerationSettings> {
-  const row = await prisma.panelSetting.findUnique({ where: { key: MODERATION_SETTINGS_KEY } });
+/** Настройки модерации проекта. Строки нет — вернутся значения по умолчанию. */
+export async function getSettings(projectId: string): Promise<ModerationSettings> {
+  const row = await prisma.panelSetting.findUnique({
+    where: { projectId_key: { projectId, key: MODERATION_SETTINGS_KEY } },
+  });
   if (!row) return normalizeSettings(null);
 
   try {
@@ -24,8 +26,11 @@ export async function getSettings(): Promise<ModerationSettings> {
  * Сохраняет присланный кусок настроек поверх текущих: браузер шлёт только ту
  * секцию, которую менял, а нормализация добивает остальное значениями по умолчанию.
  */
-export async function saveSettings(patch: unknown): Promise<ModerationSettings> {
-  const current = await getSettings();
+export async function saveSettings(
+  projectId: string,
+  patch: unknown,
+): Promise<ModerationSettings> {
+  const current = await getSettings(projectId);
   const input = (patch ?? {}) as Partial<Record<keyof ModerationSettings, unknown>>;
 
   const next = normalizeSettings({
@@ -36,8 +41,8 @@ export async function saveSettings(patch: unknown): Promise<ModerationSettings> 
 
   const value = JSON.stringify(next);
   await prisma.panelSetting.upsert({
-    where: { key: MODERATION_SETTINGS_KEY },
-    create: { key: MODERATION_SETTINGS_KEY, value },
+    where: { projectId_key: { projectId, key: MODERATION_SETTINGS_KEY } },
+    create: { projectId, key: MODERATION_SETTINGS_KEY, value },
     update: { value },
   });
 

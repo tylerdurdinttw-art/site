@@ -47,8 +47,13 @@ model User {
   /// Момент подтверждения почты. null — письмо ещё не открыли, вход закрыт.
   emailVerifiedAt DateTime?
 
-  /// owner — первая зарегистрированная учётка, у неё полный доступ.
+  /// owner — создатель проекта, moderator — принявший приглашение сотрудник.
   role String @default("owner")
+
+  /// Проект, в котором работает пользователь. null — он его ещё не выбрал:
+  /// панель уводит такого на /welcome — создать свой или войти в чужой по коду.
+  projectId String?
+  project   Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 
   lastLoginAt DateTime?
   createdAt   DateTime  @default(now())
@@ -56,7 +61,10 @@ model User {
 
   sessions Session[]
   tokens   EmailToken[]
+  /// Запись сотрудника в проекте — из неё берётся набор прав.
+  staff    Staff?
 
+  @@index([projectId])
   @@map("users")
 }
 
@@ -108,6 +116,12 @@ model EmailToken {
 
 model Server {
   id           String @id // "rust-1"
+
+  /// Проект-владелец. Значение по умолчанию нужно только для переезда старой
+  /// однопроектной базы: новые записи всегда проставляют его явно.
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   name         String // "Rust #1 [ X1000000 | NOLIMIT ]"
   hostname     String?
   maxPlayers   Int?
@@ -136,12 +150,18 @@ model Server {
   commands  ServerCommand[]
   checks    PlayerCheck[]
 
+  @@index([projectId])
   @@map("servers")
 }
 
 model Player {
   id       String @id @default(cuid())
-  steamId  String @unique
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  /// Один и тот же SteamID играет на разных проектах — запись у каждого своя.
+  steamId  String
   name     String
 
   clientType ClientType   @default(pirate)
@@ -182,6 +202,7 @@ model Player {
   violations Violation[]
   checks     PlayerCheck[]
 
+  @@unique([projectId, steamId])
   @@index([status])
   @@index([serverId])
   @@map("players")
@@ -189,6 +210,10 @@ model Player {
 
 model PlayerSession {
   id       String @id @default(cuid())
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   playerId String
   player   Player @relation(fields: [playerId], references: [id], onDelete: Cascade)
   steamId  String
@@ -202,14 +227,17 @@ model PlayerSession {
   endedAt     DateTime?
   durationSec Int?
 
-  @@index([ip])
-  @@index([steamId])
+  @@index([projectId, ip])
+  @@index([projectId, steamId])
   @@index([startedAt])
   @@map("player_sessions")
 }
 
 model PlayerEvent {
   id String @id @default(cuid())
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
@@ -224,12 +252,16 @@ model PlayerEvent {
   createdAt DateTime @default(now())
 
   @@index([createdAt])
-  @@index([type])
+  @@index([projectId, type])
+  @@index([projectId, steamId])
   @@map("player_events")
 }
 
 model Report {
   id String @id @default(cuid())
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
@@ -245,13 +277,16 @@ model Report {
 
   createdAt DateTime @default(now())
 
-  @@index([targetSteamId])
-  @@index([createdAt])
+  @@index([projectId, targetSteamId])
+  @@index([projectId, createdAt])
   @@map("reports")
 }
 
 model Violation {
   id String @id @default(cuid())
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
@@ -267,7 +302,7 @@ model Violation {
 
   createdAt DateTime @default(now())
 
-  @@index([steamId])
+  @@index([projectId, steamId])
   @@index([createdAt])
   @@map("violations")
 }
@@ -326,6 +361,9 @@ model SteamProfile {
 model Ban {
   id String @id @default(cuid())
 
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
@@ -342,8 +380,8 @@ model Ban {
   createdAt  DateTime  @default(now())
   unbannedAt DateTime?
 
-  @@index([steamId])
-  @@index([active])
+  @@index([projectId, steamId])
+  @@index([projectId, active])
   @@index([createdAt])
   @@map("bans")
 }
@@ -396,6 +434,11 @@ model ServerMap {
 /// плагин обменивает на serverId/serverKey/serverSecret командой в консоли.
 model PairingCode {
   code      String    @id
+
+  /// Проект, который выдал код: обменянный сервер попадёт именно в него.
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   createdAt DateTime  @default(now())
   expiresAt DateTime
   usedAt    DateTime?
@@ -410,18 +453,27 @@ model PairingCode {
 /// Ключевые слова, по которым подсвечиваются сообщения в чате.
 model ChatKeyword {
   id        String   @id @default(cuid())
-  word      String   @unique
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  word      String
   createdAt DateTime @default(now())
 
+  @@unique([projectId, word])
   @@map("chat_keywords")
 }
 
 /// Настройки панели вида ключ-значение (цвет пометки чата и т.п.).
 model PanelSetting {
-  key       String   @id
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  key       String
   value     String
   updatedAt DateTime @updatedAt
 
+  @@id([projectId, key])
   @@map("panel_settings")
 }
 
@@ -429,6 +481,9 @@ model PanelSetting {
 /// Завершение закрывает чат и снимает баннер с экрана игрока.
 model PlayerCheck {
   id String @id @default(cuid())
+
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
 
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
@@ -439,7 +494,7 @@ model PlayerCheck {
   /// Ник на момент вызова — чтобы шапка чата не пустела, если игрока удалили.
   name     String
 
-  /// Кто вызвал на проверку. Пока в панели нет авторизации — всегда «Панель».
+  /// Кто вызвал на проверку: логин администратора панели.
   admin String?
 
   status CheckStatus @default(active)
@@ -456,8 +511,8 @@ model PlayerCheck {
 
   messages CheckMessage[]
 
-  @@index([status])
-  @@index([steamId])
+  @@index([projectId, status])
+  @@index([projectId, steamId])
   @@map("player_checks")
 }
 
@@ -484,6 +539,9 @@ model CheckMessage {
 model ServerCommand {
   id String @id @default(cuid())
 
+  projectId String  @default("default")
+  project   Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
@@ -502,10 +560,11 @@ model ServerCommand {
   @@map("server_commands")
 }
 
-/// Проект панели. Строка одна: панель обслуживает один проект,
-/// поэтому id зафиксирован константой SINGLETON_PROJECT_ID.
+/// Проект панели. Проектов много: каждая регистрация заводит свой, а сотрудники
+/// входят в чужой по коду приглашения. Всё, что показывает панель — серверы,
+/// игроки, баны, настройки — принадлежит ровно одному проекту.
 model Project {
-  id   String @id @default("default")
+  id   String @id @default(cuid())
   /// Название, которое видно в шапке сайдбара.
   name String
   /// Часть адреса вида rustapp.io/<slug>. Латиница, цифры и дефис.
@@ -523,14 +582,27 @@ model Project {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  staff Staff[]
+  staff      Staff[]
+  users      User[]
+  servers    Server[]
+  players    Player[]
+  sessions   PlayerSession[]
+  events     PlayerEvent[]
+  reports    Report[]
+  violations Violation[]
+  bans       Ban[]
+  checks     PlayerCheck[]
+  commands   ServerCommand[]
+  keywords   ChatKeyword[]
+  settings   PanelSetting[]
+  codes      PairingCode[]
 
   @@map("projects")
 }
 
 /// Сотрудник проекта: приглашение и набор прав.
-/// Авторизации в панели ещё нет, поэтому запись описывает приглашение,
-/// а не живую учётку — принять его будет чем, когда появится вход.
+/// Пока приглашение не принято, userId пуст — это просто код, выданный человеку.
+/// Открыв /invite/<код>, он привязывает к записи свою учётку и попадает в проект.
 model Staff {
   id        String  @id @default(cuid())
   projectId String
@@ -544,6 +616,10 @@ model Staff {
 
   /// Ключи прав из lib/permissions.ts: check, ban, unban, mute, kick, chat, reports, servers, settings.
   permissions String[] @default([])
+
+  /// Учётка, принявшая приглашение. null — кодом ещё никто не воспользовался.
+  userId String? @unique
+  user   User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
 
   /// Одноразовая ссылка-приглашение.
   inviteCode String    @unique

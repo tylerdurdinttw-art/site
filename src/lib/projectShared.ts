@@ -35,6 +35,7 @@ export interface StaffRow {
 }
 
 export interface ProjectState {
+  id: string;
   name: string;
   slug: string;
   /** Номер проекта, который показывает раздел «Общее». */

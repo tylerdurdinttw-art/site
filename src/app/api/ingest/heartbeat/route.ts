@@ -46,9 +46,11 @@ export async function POST(req: Request) {
     },
   });
 
-  // Гео подтягиваем до транзакции: чтение .mmdb + запись в ip_info кешируются на 30 дней.
+  // Гео подтягиваем до транзакции: результат кешируется в ip_info на 30 дней.
   await lookupMany(body.players.map((p) => p.ip));
 
+  // Проект берётся у подписавшего запрос сервера — плагин его не передаёт.
+  const { projectId } = auth.server;
   const now = new Date();
   const presentSteamIds: string[] = [];
 
@@ -63,8 +65,9 @@ export async function POST(req: Request) {
     const language = p.language ? p.language.slice(0, 8).toLowerCase() : null;
 
     const player = await prisma.player.upsert({
-      where: { steamId: p.steamId },
+      where: { projectId_steamId: { projectId, steamId: p.steamId } },
       create: {
+        projectId,
         steamId: p.steamId,
         name: p.name,
         clientType,
@@ -108,6 +111,7 @@ export async function POST(req: Request) {
     if (!openSession) {
       await prisma.playerSession.create({
         data: {
+          projectId,
           playerId: player.id,
           steamId: p.steamId,
           serverId: auth.server.id,
@@ -126,6 +130,7 @@ export async function POST(req: Request) {
       });
       await prisma.playerSession.create({
         data: {
+          projectId,
           playerId: player.id,
           steamId: p.steamId,
           serverId: auth.server.id,

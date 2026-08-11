@@ -17,6 +17,9 @@ export const PERMISSIONS = [
 
 export type PermissionKey = (typeof PERMISSIONS)[number]['key'];
 
+/** Полный набор — его получает владелец проекта при создании. */
+export const ALL_PERMISSION_KEYS: PermissionKey[] = PERMISSIONS.map((p) => p.key);
+
 const KEYS = new Set<string>(PERMISSIONS.map((p) => p.key));
 
 /** Отбрасывает всё, чего нет в списке: наружу эндпоинты открыты. */

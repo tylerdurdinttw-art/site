@@ -28,12 +28,13 @@ const MESSAGE_LIMIT = 200;
 
 /** Кладёт команду в очередь плагина. Плагин заберёт её ближайшим опросом. */
 export async function queueCommand(
+  projectId: string,
   serverId: string,
   type: CheckCommandType,
   steamId: string,
   reason = '',
 ): Promise<void> {
-  await prisma.serverCommand.create({ data: { serverId, type, steamId, reason } });
+  await prisma.serverCommand.create({ data: { projectId, serverId, type, steamId, reason } });
 }
 
 function toMessage(row: {
@@ -52,9 +53,9 @@ function toMessage(row: {
   };
 }
 
-export async function listActiveChecks(): Promise<ActiveCheck[]> {
+export async function listActiveChecks(projectId: string): Promise<ActiveCheck[]> {
   const rows = await prisma.playerCheck.findMany({
-    where: { status: 'active' },
+    where: { projectId, status: 'active' },
     orderBy: { startedAt: 'asc' },
     include: {
       server: { select: { name: true } },
@@ -77,18 +78,18 @@ export async function listActiveChecks(): Promise<ActiveCheck[]> {
 /** Сколько проверок показывает раздел «Проверки». */
 const HISTORY_LIMIT = 200;
 
-function historyWhere(filter: CheckHistoryFilter): Prisma.PlayerCheckWhereInput {
+function historyWhere(projectId: string, filter: CheckHistoryFilter): Prisma.PlayerCheckWhereInput {
   switch (filter) {
     case 'active':
-      return { status: 'active' };
+      return { projectId, status: 'active' };
     case 'finished':
-      return { status: 'finished' };
+      return { projectId, status: 'finished' };
     case 'banned':
-      return { outcome: { in: ['ban', 'team_ban'] } };
+      return { projectId, outcome: { in: ['ban', 'team_ban'] } };
     case 'clean':
-      return { outcome: 'passed' };
+      return { projectId, outcome: 'passed' };
     default:
-      return {};
+      return { projectId };
   }
 }
 
@@ -96,9 +97,12 @@ function historyWhere(filter: CheckHistoryFilter): Prisma.PlayerCheckWhereInput 
  * Список проверок для раздела «Проверки»: свежие сверху.
  * Дискорд берётся из карточки игрока — его называет сам игрок командой /ds.
  */
-export async function listCheckHistory(filter: CheckHistoryFilter): Promise<CheckHistoryItem[]> {
+export async function listCheckHistory(
+  projectId: string,
+  filter: CheckHistoryFilter,
+): Promise<CheckHistoryItem[]> {
   const rows = await prisma.playerCheck.findMany({
-    where: historyWhere(filter),
+    where: historyWhere(projectId, filter),
     orderBy: { startedAt: 'desc' },
     take: HISTORY_LIMIT,
     include: {
@@ -113,7 +117,7 @@ export async function listCheckHistory(filter: CheckHistoryFilter): Promise<Chec
   // Бейдж «забанен сейчас» — это текущее состояние игрока, а не итог этой проверки:
   // игрок мог пройти проверку и получить бан позже, и наоборот.
   const banned = await prisma.ban.findMany({
-    where: { active: true, steamId: { in: rows.map((r) => r.steamId) } },
+    where: { projectId, active: true, steamId: { in: rows.map((r) => r.steamId) } },
     select: { steamId: true },
     distinct: ['steamId'],
   });
@@ -136,7 +140,10 @@ export async function listCheckHistory(filter: CheckHistoryFilter): Promise<Chec
 }
 
 /** Проверка целиком — для её отдельной страницы. null — такой проверки нет. */
-export async function getCheckRoom(checkId: string): Promise<CheckRoomData | null> {
+export async function getCheckRoom(
+  projectId: string,
+  checkId: string,
+): Promise<CheckRoomData | null> {
   const row = await prisma.playerCheck.findUnique({
     where: { id: checkId },
     include: {
@@ -144,7 +151,9 @@ export async function getCheckRoom(checkId: string): Promise<CheckRoomData | nul
       messages: { orderBy: { createdAt: 'asc' }, take: MESSAGE_LIMIT },
     },
   });
-  if (!row) return null;
+  // Чужая проверка для этого проекта — та же «не найдена»: подтверждать
+  // существование id из соседнего проекта незачем.
+  if (!row || row.projectId !== projectId) return null;
 
   return {
     id: row.id,
@@ -165,13 +174,22 @@ export async function getCheckRoom(checkId: string): Promise<CheckRoomData | nul
 }
 
 /** Переписка одной проверки — для карточки в списке. */
-export async function getCheckMessages(checkId: string): Promise<CheckMessage[] | null> {
+export async function getCheckMessages(
+  projectId: string,
+  checkId: string,
+): Promise<CheckMessage[] | null> {
   const check = await prisma.playerCheck.findUnique({
     where: { id: checkId },
     include: { messages: { orderBy: { createdAt: 'asc' }, take: MESSAGE_LIMIT } },
   });
-  if (!check) return null;
+  if (!check || check.projectId !== projectId) return null;
   return check.messages.map(toMessage);
+}
+
+/** Проверка проекта по id. null — её нет или она принадлежит другому проекту. */
+export async function findCheck(projectId: string, checkId: string) {
+  const check = await prisma.playerCheck.findUnique({ where: { id: checkId } });
+  return check && check.projectId === projectId ? check : null;
 }
 
 /**
@@ -179,6 +197,7 @@ export async function getCheckMessages(checkId: string): Promise<CheckMessage[] 
  * Вызывается из ingest при разборе пачки chat_message.
  */
 export async function recordPlayerMessages(
+  projectId: string,
   batch: { steamId?: string; message?: string; channel?: string; timestamp?: number }[],
 ): Promise<void> {
   const steamIds = Array.from(
@@ -187,7 +206,7 @@ export async function recordPlayerMessages(
   if (steamIds.length === 0) return;
 
   const checks = await prisma.playerCheck.findMany({
-    where: { status: 'active', steamId: { in: steamIds } },
+    where: { projectId, status: 'active', steamId: { in: steamIds } },
     select: { id: true, steamId: true },
   });
   if (checks.length === 0) return;

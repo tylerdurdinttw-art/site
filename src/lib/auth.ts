@@ -100,6 +100,7 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
     login: session.user.login,
     email: session.user.email,
     role: session.user.role,
+    projectId: session.user.projectId,
   };
 }
 
@@ -108,6 +109,16 @@ export async function requireUser(): Promise<SessionUser> {
   const user = await getCurrentUser();
   if (!user) redirect('/login');
   return user;
+}
+
+/**
+ * Для страниц панели: кроме входа требует выбранный проект.
+ * Пользователь без проекта уходит на /welcome — создавать свой или входить в чужой.
+ */
+export async function requireProjectUser(): Promise<SessionUser & { projectId: string }> {
+  const user = await requireUser();
+  if (!user.projectId) redirect('/welcome');
+  return user as SessionUser & { projectId: string };
 }
 
 /** Гасит текущую сессию: строку из базы и куку. */

@@ -1,21 +1,24 @@
 import { redirect } from 'next/navigation';
 import { requireUser } from '@/lib/auth';
 import { getProjectState } from '@/lib/project';
-import CreateProjectForm from '@/components/CreateProjectForm';
+import WelcomeChoice from '@/components/WelcomeChoice';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/** Первый экран панели: проект ещё не создан. Если он есть — сюда заходить незачем. */
+/**
+ * Развилка после регистрации: свой проект или чужой по коду приглашения.
+ * У кого проект уже есть, тому здесь делать нечего.
+ */
 export default async function WelcomePage() {
-  await requireUser();
+  const user = await requireUser();
 
-  const project = await getProjectState();
+  const project = await getProjectState(user.projectId);
   if (project) redirect(project.done ? '/players' : '/start');
 
   return (
     <main className="dot-grid flex min-h-screen items-center justify-center px-4 py-16">
-      <CreateProjectForm />
+      <WelcomeChoice login={user.login} />
     </main>
   );
 }

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { bus, eventsSince } from '@/lib/eventBus';
 import type { PanelEvent } from '@/lib/types';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -13,13 +13,14 @@ const KEEPALIVE_MS = 20_000;
  * `?poll=1` — фолбэк для клиентов без SSE: отдаёт JSON с событиями после `lastId`.
  */
 export async function GET(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const url = new URL(req.url);
 
   if (url.searchParams.get('poll') === '1') {
-    const events = eventsSince(url.searchParams.get('lastId'));
+    const events = eventsSince(projectId, url.searchParams.get('lastId'));
     return NextResponse.json({ events }, { headers: { 'cache-control': 'no-store' } });
   }
 

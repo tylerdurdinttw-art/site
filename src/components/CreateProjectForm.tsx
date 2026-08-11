@@ -13,7 +13,7 @@ const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/gif'];
  * Экран создания проекта. Ссылка подставляется из названия, пока её не тронули руками:
  * так «Null Rust» сразу превращается в quickpanel.com/nullrust.
  */
-export default function CreateProjectForm() {
+export default function CreateProjectForm({ onBack }: { onBack?: () => void } = {}) {
   const router = useRouter();
 
   const [name, setName] = useState('');
@@ -176,7 +176,7 @@ export default function CreateProjectForm() {
         <div className="flex items-stretch gap-2 pt-1">
           <button
             type="button"
-            onClick={() => router.back()}
+            onClick={() => (onBack ? onBack() : router.back())}
             aria-label="Назад"
             className="btn-ghost w-11 shrink-0 px-0"
           >

@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { ensureRustMap, getCachedImage, mapKey } from '@/lib/rustmaps';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,24 +11,28 @@ export const dynamic = 'force-dynamic';
  * при первом обращении панель скачивает её с rustmaps и сохраняет.
  */
 export async function GET(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const serverId = new URL(req.url).searchParams.get('serverId');
   if (!serverId) return NextResponse.json({ error: 'serverId is required' }, { status: 400 });
 
-  const server = await prisma.server.findUnique({
-    where: { id: serverId },
+  const server = await prisma.server.findFirst({
+    where: { id: serverId, projectId },
     select: { seed: true, worldSize: true },
   });
+  // Карта чужого сервера не отдаётся даже как картинка: без своего сервера тут смотреть нечего.
+  if (!server) return NextResponse.json({ error: 'server not found' }, { status: 404 });
+
   const terrain = await prisma.serverMap.findUnique({
     where: { serverId },
     select: { seed: true, worldSize: true },
   });
 
   // seed из heartbeat, а у старых версий плагина — из загруженного рельефа.
-  const seed = server?.seed ?? terrain?.seed ?? null;
-  const worldSize = server?.worldSize ?? terrain?.worldSize ?? null;
+  const seed = server.seed ?? terrain?.seed ?? null;
+  const worldSize = server.worldSize ?? terrain?.worldSize ?? null;
 
   if (!seed || !worldSize) {
     return NextResponse.json({ error: 'seed/size сервера неизвестны' }, { status: 404 });

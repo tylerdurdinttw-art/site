@@ -78,7 +78,7 @@ export async function POST(req: Request) {
 
     await prisma.server.update({
       where: { id: target.id },
-      data: { name, hostname, maxPlayers, serverKey, serverSecret },
+      data: { name, hostname, maxPlayers, serverKey, serverSecret, projectId: row.projectId },
     });
 
     return NextResponse.json({ serverId: target.id, serverKey, serverSecret, serverName: name });
@@ -95,8 +95,17 @@ export async function POST(req: Request) {
     });
     if (claimed.count === 0) throw new Error('ALREADY_USED');
 
+    // Проект берётся из кода: он и определяет, чья панель увидит этот сервер.
     return tx.server.create({
-      data: { id: serverId, name, hostname, maxPlayers, serverKey, serverSecret },
+      data: {
+        id: serverId,
+        projectId: row.projectId,
+        name,
+        hostname,
+        maxPlayers,
+        serverKey,
+        serverSecret,
+      },
     });
   }).catch((err: unknown) => {
     if (err instanceof Error && err.message === 'ALREADY_USED') return null;

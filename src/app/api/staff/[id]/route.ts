@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { sanitizePermissions } from '@/lib/permissions';
 import { toStaffRow } from '@/lib/project';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,10 +11,11 @@ const noStore = { 'cache-control': 'no-store' };
 
 /** Правка сотрудника: имя, контакт и набор прав. */
 export async function PATCH(req: Request, { params }: { params: { id: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const staff = await prisma.staff.findUnique({ where: { id: params.id } });
+  const staff = await prisma.staff.findFirst({ where: { id: params.id, projectId } });
   if (!staff) return NextResponse.json({ error: 'сотрудник не найден' }, { status: 404 });
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -44,12 +45,25 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
 }
 
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const staff = await prisma.staff.findUnique({ where: { id: params.id } });
+  const staff = await prisma.staff.findFirst({ where: { id: params.id, projectId } });
   if (!staff) return NextResponse.json({ error: 'сотрудник не найден' }, { status: 404 });
 
+  // Владелец — единственный, кого нельзя убрать: проект остался бы без хозяина.
+  if (staff.role === 'owner') {
+    return NextResponse.json({ error: 'Владельца проекта убрать нельзя.' }, { status: 409 });
+  }
+
   await prisma.staff.delete({ where: { id: staff.id } });
+
+  // Если приглашением уже пользовались, человека нужно и из проекта вывести,
+  // иначе он останется в панели с правами удалённой записи.
+  if (staff.userId) {
+    await prisma.user.update({ where: { id: staff.userId }, data: { projectId: null } });
+  }
+
   return NextResponse.json({ ok: true }, { headers: noStore });
 }

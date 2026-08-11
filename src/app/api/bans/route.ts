@@ -1,20 +1,21 @@
 import { NextResponse } from 'next/server';
 import { listBans } from '@/lib/bans';
 import { isBanStatusFilter } from '@/lib/bansShared';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** Список банов с фильтрами плюс счётчики по всей таблице. */
 export async function GET(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const params = new URL(req.url).searchParams;
   const status = params.get('status');
 
-  const data = await listBans({
+  const data = await listBans(projectId, {
     name: params.get('name')?.trim() ?? '',
     steamId: params.get('steamId')?.trim() ?? '',
     reason: params.get('reason')?.trim() ?? '',

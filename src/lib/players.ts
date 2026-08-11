@@ -2,7 +2,7 @@ import { prisma } from '@/lib/prisma';
 import { gridSquare } from '@/lib/grid';
 import { getPositions } from '@/lib/positions';
 import { getSteamInfo } from '@/lib/steam';
-import { checkVpn } from '@/lib/vpn';
+import { lookupIp } from '@/lib/geo';
 import type {
   ClientType,
   CombatStats,
@@ -28,9 +28,10 @@ export function resolveClientType(steamId: string, licensedFlag: boolean | undef
   return licensedFlag === false ? 'pirate' : 'licensed';
 }
 
-/** Полный список игроков — без пагинации и фильтров (по ТЗ этапа). */
-export async function listPlayers(): Promise<Player[]> {
+/** Полный список игроков проекта — без пагинации и фильтров (по ТЗ этапа). */
+export async function listPlayers(projectId: string): Promise<Player[]> {
   const rows = await prisma.player.findMany({
+    where: { projectId },
     include: { server: true },
     orderBy: [{ status: 'asc' }, { name: 'asc' }],
   });
@@ -85,14 +86,14 @@ export function teamMode(teamSize: number): TeamMode {
  * Наиграно на проекте: сумма закрытых сессий плюс текущая незакрытая.
  * Считается по всем серверам панели, а не по одному.
  */
-async function playtimeSec(steamId: string): Promise<number> {
+async function playtimeSec(projectId: string, steamId: string): Promise<number> {
   const [closed, open] = await Promise.all([
     prisma.playerSession.aggregate({
-      where: { steamId, endedAt: { not: null } },
+      where: { projectId, steamId, endedAt: { not: null } },
       _sum: { durationSec: true },
     }),
     prisma.playerSession.findMany({
-      where: { steamId, endedAt: null },
+      where: { projectId, steamId, endedAt: null },
       select: { startedAt: true },
     }),
   ]);
@@ -107,9 +108,9 @@ async function playtimeSec(steamId: string): Promise<number> {
 }
 
 /** Длительность текущей сессии, секунд. null — открытой сессии нет. */
-async function currentSessionSec(steamId: string): Promise<number | null> {
+async function currentSessionSec(projectId: string, steamId: string): Promise<number | null> {
   const open = await prisma.playerSession.findFirst({
-    where: { steamId, endedAt: null },
+    where: { projectId, steamId, endedAt: null },
     orderBy: { startedAt: 'desc' },
     select: { startedAt: true },
   });
@@ -118,19 +119,22 @@ async function currentSessionSec(steamId: string): Promise<number | null> {
 }
 
 /**
- * Боевая статистика за неделю. Убийства и смерти приходят событиями от плагина;
- * пока их не шлют, счётчики честно остаются нулевыми.
+ * Боевая статистика за неделю. Плагин шлёт по событию на каждое убийство
+ * (`player_killed`, steamId — убийца) и на каждую смерть от рук игрока
+ * (`player_died`, steamId — погибший), поэтому убийства и смерти считаются
+ * независимо и одно и то же событие в обе стороны не попадает.
  */
-async function combatStats(steamId: string): Promise<CombatStats> {
+async function combatStats(projectId: string, steamId: string): Promise<CombatStats> {
   const since = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
   const events = await prisma.playerEvent.findMany({
     where: {
+      projectId,
+      steamId,
       createdAt: { gte: since },
       type: { in: ['player_killed', 'player_died'] },
-      OR: [{ steamId }, { payload: { path: ['victimSteamId'], equals: steamId } }],
     },
-    select: { type: true, steamId: true, payload: true },
+    select: { type: true, payload: true },
   });
 
   let kills = 0;
@@ -138,26 +142,38 @@ async function combatStats(steamId: string): Promise<CombatStats> {
   let headshots = 0;
 
   for (const event of events) {
-    const payload = (event.payload ?? {}) as { victimSteamId?: string; headshot?: boolean };
-
-    if (event.type === 'player_killed' && event.steamId === steamId) {
-      kills += 1;
-      if (payload.headshot) headshots += 1;
+    if (event.type === 'player_died') {
+      deaths += 1;
       continue;
     }
-    if (event.type === 'player_died' && event.steamId === steamId) deaths += 1;
-    else if (payload.victimSteamId === steamId) deaths += 1;
+
+    kills += 1;
+    const payload = (event.payload ?? {}) as { headshot?: boolean };
+    if (payload.headshot === true) headshots += 1;
   }
 
-  return { kills, deaths, headshots, kd: deaths === 0 ? kills || 1 : kills / deaths };
+  return { kills, deaths, headshots, kd: kdRatio(kills, deaths) };
+}
+
+/**
+ * K/D в привычном для игроков виде: без смертей отношение равно числу убийств
+ * (а не единице и не бесконечности), а у игрока без боёв это честный ноль.
+ */
+export function kdRatio(kills: number, deaths: number): number {
+  if (deaths <= 0) return kills;
+  return kills / deaths;
 }
 
 /** Состав команды: игроки того же сервера с той же командой из RelationshipManager. */
-async function teamMates(steamId: string, serverId: string | null): Promise<TeamMate[]> {
+async function teamMates(
+  projectId: string,
+  steamId: string,
+  serverId: string | null,
+): Promise<TeamMate[]> {
   if (!serverId) return [];
 
   const events = await prisma.playerEvent.findMany({
-    where: { serverId, steamId, type: 'team_updated' },
+    where: { projectId, serverId, steamId, type: 'team_updated' },
     orderBy: { createdAt: 'desc' },
     take: 1,
     select: { payload: true },
@@ -171,7 +187,7 @@ async function teamMates(steamId: string, serverId: string | null): Promise<Team
 
   const [players, avatars] = await Promise.all([
     prisma.player.findMany({
-      where: { steamId: { in: ids } },
+      where: { projectId, steamId: { in: ids } },
       select: { steamId: true, name: true, status: true },
     }),
     prisma.steamProfile.findMany({
@@ -189,9 +205,9 @@ async function teamMates(steamId: string, serverId: string | null): Promise<Team
   }));
 }
 
-async function playerReports(steamId: string): Promise<PlayerReport[]> {
+async function playerReports(projectId: string, steamId: string): Promise<PlayerReport[]> {
   const rows = await prisma.report.findMany({
-    where: { targetSteamId: steamId },
+    where: { projectId, targetSteamId: steamId },
     orderBy: { createdAt: 'desc' },
     take: 50,
   });
@@ -206,9 +222,9 @@ async function playerReports(steamId: string): Promise<PlayerReport[]> {
   }));
 }
 
-async function playerActivity(steamId: string): Promise<PlayerActivity[]> {
+async function playerActivity(projectId: string, steamId: string): Promise<PlayerActivity[]> {
   const rows = await prisma.playerEvent.findMany({
-    where: { steamId },
+    where: { projectId, steamId },
     orderBy: { createdAt: 'desc' },
     take: 50,
     include: { server: { select: { name: true } } },
@@ -223,23 +239,26 @@ async function playerActivity(steamId: string): Promise<PlayerActivity[]> {
 }
 
 /** Карточка игрока для модального окна. null — такого SteamID панель не видела. */
-export async function getPlayerDetails(steamId: string): Promise<PlayerDetails | null> {
+export async function getPlayerDetails(
+  projectId: string,
+  steamId: string,
+): Promise<PlayerDetails | null> {
   const row = await prisma.player.findUnique({
-    where: { steamId },
+    where: { projectId_steamId: { projectId, steamId } },
     include: { server: true },
   });
   if (!row) return null;
 
   const [ipInfo, steam, seconds, sessionSec, combat, team, reports, activity, avatar] =
     await Promise.all([
-      row.ip ? prisma.ipInfo.findUnique({ where: { ip: row.ip } }) : Promise.resolve(null),
+      row.ip ? lookupIp(row.ip) : Promise.resolve(null),
       getSteamInfo(steamId),
-      playtimeSec(steamId),
-      currentSessionSec(steamId),
-      combatStats(steamId),
-      teamMates(steamId, row.serverId),
-      playerReports(steamId),
-      playerActivity(steamId),
+      playtimeSec(projectId, steamId),
+      currentSessionSec(projectId, steamId),
+      combatStats(projectId, steamId),
+      teamMates(projectId, steamId, row.serverId),
+      playerReports(projectId, steamId),
+      playerActivity(projectId, steamId),
       prisma.steamProfile.findUnique({ where: { steamId }, select: { avatarUrl: true } }),
     ]);
 
@@ -281,7 +300,7 @@ export async function getPlayerDetails(steamId: string): Promise<PlayerDetails |
     city: ipInfo?.city ?? null,
     country: ipInfo?.country ?? null,
     isp: ipInfo?.isp ?? null,
-    isVpn: checkVpn(ipInfo?.isp).isVpn,
+    isVpn: ipInfo?.isVpn === true,
 
     steam,
 
@@ -290,12 +309,12 @@ export async function getPlayerDetails(steamId: string): Promise<PlayerDetails |
   } satisfies PlayerDetails;
 }
 
-/** total — по всем известным SteamID, историю не чистим. */
-export async function getStats() {
+/** total — по всем известным SteamID проекта, историю не чистим. */
+export async function getStats(projectId: string) {
   const [total, online, sleeping] = await Promise.all([
-    prisma.player.count(),
-    prisma.player.count({ where: { status: 'online' } }),
-    prisma.player.count({ where: { status: 'sleeping' } }),
+    prisma.player.count({ where: { projectId } }),
+    prisma.player.count({ where: { projectId, status: 'online' } }),
+    prisma.player.count({ where: { projectId, status: 'sleeping' } }),
   ]);
 
   // «На сервере» = online + sleeping, всё остальное — оффлайн.

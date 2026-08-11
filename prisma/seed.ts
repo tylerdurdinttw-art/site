@@ -2,6 +2,7 @@ import { PrismaClient, type ClientType, type PlayerStatus } from '@prisma/client
 
 const prisma = new PrismaClient();
 
+const PROJECT_SLUG = 'demo';
 const SERVER_ID = 'rust-1';
 const SERVER_NAME = 'Rust #1 [ X1000000 | NOLIMIT ]';
 
@@ -178,10 +179,19 @@ const players: SeedPlayer[] = [
 ];
 
 async function main() {
+  // Сид наполняет один демонстрационный проект: всё остальное в базе висит на нём.
+  const project = await prisma.project.upsert({
+    where: { slug: PROJECT_SLUG },
+    create: { name: 'Demo Rust', slug: PROJECT_SLUG, onboardingStep: 4, onboardingDone: true },
+    update: {},
+  });
+  const projectId = project.id;
+
   await prisma.server.upsert({
     where: { id: SERVER_ID },
     create: {
       id: SERVER_ID,
+      projectId,
       name: SERVER_NAME,
       hostname: 'rust-1.local',
       maxPlayers: 300,
@@ -189,13 +199,14 @@ async function main() {
       serverKey: 'dev-key-rust-1',
       serverSecret: 'dev-secret-rust-1',
     },
-    update: { name: SERVER_NAME },
+    update: { name: SERVER_NAME, projectId },
   });
 
   await prisma.server.upsert({
     where: { id: SERVER_2_ID },
     create: {
       id: SERVER_2_ID,
+      projectId,
       name: SERVER_2_NAME,
       hostname: 'rust-2.local',
       maxPlayers: 200,
@@ -203,7 +214,7 @@ async function main() {
       serverKey: 'dev-key-rust-2',
       serverSecret: 'dev-secret-rust-2',
     },
-    update: { name: SERVER_2_NAME },
+    update: { name: SERVER_2_NAME, projectId },
   });
 
   const ttl = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -223,8 +234,9 @@ async function main() {
     const lastSeenAt = new Date(Date.now() - p.minutesAgo * 60 * 1000);
 
     const saved = await prisma.player.upsert({
-      where: { steamId: p.steamId },
+      where: { projectId_steamId: { projectId, steamId: p.steamId } },
       create: {
+        projectId,
         steamId: p.steamId,
         name: p.name,
         clientType: p.clientType,
@@ -262,6 +274,7 @@ async function main() {
     if (!open && p.status !== 'offline') {
       await prisma.playerSession.create({
         data: {
+          projectId,
           playerId: saved.id,
           steamId: p.steamId,
           serverId: p.serverId,

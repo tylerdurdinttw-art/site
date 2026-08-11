@@ -14,8 +14,8 @@ const REPORT_LIMIT = 2000;
  * `deleteAfterDays` отсекает старые жалобы, `ignoreAfterCheckHours` убирает
  * из выдачи тех, кого недавно уже проверяли.
  */
-export async function listReportedPlayers(): Promise<ReportedPlayer[]> {
-  const settings = await getSettings();
+export async function listReportedPlayers(projectId: string): Promise<ReportedPlayer[]> {
+  const settings = await getSettings(projectId);
 
   const since =
     settings.reports.deleteAfterDays > 0
@@ -23,7 +23,7 @@ export async function listReportedPlayers(): Promise<ReportedPlayer[]> {
       : null;
 
   const reports = await prisma.report.findMany({
-    where: since ? { createdAt: { gte: since } } : {},
+    where: since ? { projectId, createdAt: { gte: since } } : { projectId },
     orderBy: { createdAt: 'desc' },
     take: REPORT_LIMIT,
     include: { server: { select: { name: true } } },
@@ -59,7 +59,7 @@ export async function listReportedPlayers(): Promise<ReportedPlayer[]> {
 
   const [players, avatars, checks, bans] = await Promise.all([
     prisma.player.findMany({
-      where: { steamId: { in: steamIds } },
+      where: { projectId, steamId: { in: steamIds } },
       select: { steamId: true, name: true, status: true, server: { select: { name: true } } },
     }),
     prisma.steamProfile.findMany({
@@ -67,11 +67,11 @@ export async function listReportedPlayers(): Promise<ReportedPlayer[]> {
       select: { steamId: true, avatarUrl: true },
     }),
     prisma.playerCheck.findMany({
-      where: { status: 'active', steamId: { in: steamIds } },
+      where: { projectId, status: 'active', steamId: { in: steamIds } },
       select: { steamId: true },
     }),
     prisma.ban.findMany({
-      where: { active: true, steamId: { in: steamIds } },
+      where: { projectId, active: true, steamId: { in: steamIds } },
       select: { steamId: true },
       distinct: ['steamId'],
     }),
@@ -104,6 +104,7 @@ export async function listReportedPlayers(): Promise<ReportedPlayer[]> {
     const checkedSince = new Date(Date.now() - ignoreHours * 60 * 60 * 1000);
     const checked = await prisma.playerCheck.findMany({
       where: {
+        projectId,
         status: 'finished',
         steamId: { in: steamIds },
         finishedAt: { gte: checkedSince },
@@ -126,14 +127,17 @@ export async function listReportedPlayers(): Promise<ReportedPlayer[]> {
  * Убирает все жалобы на игрока и обнуляет его счётчик.
  * Вызывается по настройкам «удалять репорты после блокировки / после проверки».
  */
-export async function dropReportsFor(steamId: string): Promise<void> {
-  await prisma.report.deleteMany({ where: { targetSteamId: steamId } });
-  await prisma.player.updateMany({ where: { steamId }, data: { reportsCount: 0 } });
+export async function dropReportsFor(projectId: string, steamId: string): Promise<void> {
+  await prisma.report.deleteMany({ where: { projectId, targetSteamId: steamId } });
+  await prisma.player.updateMany({ where: { projectId, steamId }, data: { reportsCount: 0 } });
 }
 
 /** Полная очистка раздела — кнопка «Удалить все репорты» в настройках. */
-export async function deleteAllReports(): Promise<number> {
-  const { count } = await prisma.report.deleteMany();
-  await prisma.player.updateMany({ where: { reportsCount: { gt: 0 } }, data: { reportsCount: 0 } });
+export async function deleteAllReports(projectId: string): Promise<number> {
+  const { count } = await prisma.report.deleteMany({ where: { projectId } });
+  await prisma.player.updateMany({
+    where: { projectId, reportsCount: { gt: 0 } },
+    data: { reportsCount: 0 },
+  });
   return count;
 }

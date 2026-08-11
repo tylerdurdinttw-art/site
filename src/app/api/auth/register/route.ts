@@ -22,7 +22,8 @@ interface Body {
 
 /**
  * Регистрация. Учётка создаётся сразу, но войти по ней нельзя, пока не открыта
- * ссылка из письма. Первый зарегистрировавшийся становится владельцем панели.
+ * ссылка из письма. Проекта у новой учётки нет: после входа человек выбирает
+ * на /welcome — завести свой или войти в чужой по коду приглашения.
  */
 export async function POST(req: Request) {
   const limit = rateLimit(`auth:register:${clientIp(req)}`, 5);
@@ -67,15 +68,15 @@ export async function POST(req: Request) {
 
   await pruneExpired();
 
-  // Первая учётка — владелец панели, остальные заводятся модераторами.
-  const isFirst = (await prisma.user.count()) === 0;
-
+  // Роль встанет вместе с проектом: owner — тому, кто его создал,
+  // moderator — тому, кто вошёл по приглашению.
   const user = await prisma.user.create({
     data: {
       login,
       email,
       passwordHash: await hashPassword(password),
-      role: isFirst ? 'owner' : 'moderator',
+      role: 'moderator',
+      projectId: null,
     },
   });
 

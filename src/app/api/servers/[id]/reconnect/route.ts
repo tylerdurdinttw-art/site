@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { createPairingCode } from '@/lib/pairing';
 import { rateLimit } from '@/lib/rateLimit';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -12,8 +12,9 @@ export const dynamic = 'force-dynamic';
  * существующей записи, а не заведёт новую. Данные и баны сервера сохраняются.
  */
 export async function POST(_req: Request, { params }: { params: { id: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const limit = rateLimit('pair:create', 20);
   if (!limit.allowed) {
@@ -23,10 +24,10 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     );
   }
 
-  const server = await prisma.server.findUnique({ where: { id: params.id } });
+  const server = await prisma.server.findFirst({ where: { id: params.id, projectId } });
   if (!server) return NextResponse.json({ error: 'server not found' }, { status: 404 });
 
-  const created = await createPairingCode(server.id);
+  const created = await createPairingCode(projectId, server.id);
 
   return NextResponse.json(
     { code: created.code, expiresAt: created.expiresAt.toISOString() },

@@ -102,6 +102,26 @@ function visibilityLabel(visibility: number | null): string {
   return 'Закрыт';
 }
 
+type Steam = PlayerDetails['steam'];
+
+function banned(steam: Steam | undefined): boolean {
+  return Boolean(steam?.available && (steam.vacBanned || steam.gameBanCount > 0));
+}
+
+/**
+ * «Нет» здесь — это ответ Steam, а не отсутствие данных: без ключа или при
+ * ошибке запроса панель честно говорит, что не знает.
+ */
+function banLabel(steam: Steam | undefined): string {
+  if (!steam?.available) return 'Steam не ответил';
+
+  const parts: string[] = [];
+  if (steam.vacBanned) parts.push(`VAC: ${steam.vacBanCount || 1}`);
+  if (steam.gameBanCount > 0) parts.push(`EAC: ${steam.gameBanCount}`);
+
+  return parts.length > 0 ? parts.join(' · ') : 'Нет';
+}
+
 /* ================= блоки разметки ================= */
 
 function Section({
@@ -389,7 +409,22 @@ export default function PlayerModal({ steamId, onClose }: Props) {
                 <Badge color={MODE_COLOR[data.teamMode]}>{MODE_LABEL[data.teamMode]}</Badge>
                 <Badge color="#22c55e">{(data.language ?? 'n/a').toUpperCase()}</Badge>
                 <Badge color="#3b82f6">{data.ping} ms</Badge>
-                <Badge color={steam?.vacBanned ? 'var(--danger)' : 'var(--text-dim)'}>VAC</Badge>
+
+                {/*
+                  Значки блокировок вешаются только на тех, у кого они есть.
+                  Постоянный серый «VAC» на каждом игроке ничего не сообщал: по нему
+                  нельзя было отличить чистый аккаунт от того, о котором Steam молчит.
+                */}
+                {steam?.available && steam.vacBanned && (
+                  <Badge color="var(--danger)">
+                    VAC{steam.vacBanCount > 1 ? ` ×${steam.vacBanCount}` : ''}
+                  </Badge>
+                )}
+                {steam?.available && steam.gameBanCount > 0 && (
+                  <Badge color="var(--danger)">
+                    EAC{steam.gameBanCount > 1 ? ` ×${steam.gameBanCount}` : ''}
+                  </Badge>
+                )}
               </div>
 
               {checkMessage && (
@@ -470,6 +505,18 @@ export default function PlayerModal({ steamId, onClose }: Props) {
                         {steam?.rustMinutes2Weeks === null || steam?.rustMinutes2Weeks === undefined
                           ? 'Информация скрыта'
                           : formatHours(steam.rustMinutes2Weeks)}
+                      </Cell>
+                      <Cell label="Блокировки" wide>
+                        <span
+                          className={banned(steam) ? 'text-[color:var(--danger)]' : undefined}
+                        >
+                          {banLabel(steam)}
+                        </span>
+                      </Cell>
+                      <Cell label="С последнего бана" wide>
+                        {steam?.available && banned(steam) && steam.daysSinceLastBan !== null
+                          ? `${steam.daysSinceLastBan} дн.`
+                          : DASH}
                       </Cell>
                     </Section>
 

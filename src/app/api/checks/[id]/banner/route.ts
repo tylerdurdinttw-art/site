@@ -1,18 +1,19 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { queueCommand } from '@/lib/checks';
+import { findCheck, queueCommand } from '@/lib/checks';
 import { BANNER_TEXT } from '@/lib/checksShared';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 /** Баннер на весь экран игрока: { show: true } — показать, { show: false } — убрать. */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const check = await prisma.playerCheck.findUnique({ where: { id: params.id } });
+  const check = await findCheck(projectId, params.id);
   if (!check) return NextResponse.json({ error: 'check not found' }, { status: 404 });
   if (check.status !== 'active') {
     return NextResponse.json({ error: 'Проверка уже завершена.' }, { status: 409 });
@@ -28,6 +29,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   const show = body.show !== false;
 
   await queueCommand(
+    projectId,
     check.serverId,
     show ? 'check_banner' : 'check_banner_hide',
     check.steamId,

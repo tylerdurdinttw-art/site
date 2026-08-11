@@ -1,12 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import {
-  ONBOARDING_STEPS,
-  SINGLETON_PROJECT_ID,
-  getProjectState,
-  slugify,
-} from '@/lib/project';
-import { requireApiUser } from '@/lib/apiAuth';
+import { ONBOARDING_STEPS, createProjectForUser, getProjectState, slugify } from '@/lib/project';
+import { getCurrentUser } from '@/lib/auth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -16,26 +12,29 @@ const LOGO_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif']);
 
 const noStore = { 'cache-control': 'no-store' };
 
-/** Состояние проекта: по нему решается, куда пускать пользователя. */
+/** Состояние проекта пользователя. project: null — он ещё не выбрал проект. */
 export async function GET() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const state = await getProjectState();
+  const state = await getProjectState(user.projectId);
   return NextResponse.json({ project: state }, { headers: noStore });
 }
 
 /**
- * Создание проекта — первый экран панели.
+ * Создание своего проекта — единственный эндпоинт, который работает без уже
+ * выбранного проекта: он его и заводит, а автора делает владельцем.
  * Тело приходит как multipart/form-data: name, slug и необязательный logo.
  */
 export async function POST(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
 
-  const existing = await prisma.project.findUnique({ where: { id: SINGLETON_PROJECT_ID } });
-  if (existing) {
-    return NextResponse.json({ error: 'проект уже создан' }, { status: 409 });
+  if (user.projectId) {
+    return NextResponse.json(
+      { error: 'Вы уже состоите в проекте.' },
+      { status: 409 },
+    );
   }
 
   const form = await req.formData();
@@ -46,10 +45,14 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'название: от 2 до 48 символов' }, { status: 400 });
   }
   if (!slug) {
-    return NextResponse.json(
-      { error: 'ссылка: нужны латиница или цифры' },
-      { status: 400 },
-    );
+    return NextResponse.json({ error: 'ссылка: нужны латиница или цифры' }, { status: 400 });
+  }
+
+  // Адрес общий на всю панель: занятый — это ошибка формы, а не повод
+  // молча подставить другой.
+  const taken = await prisma.project.findUnique({ where: { slug }, select: { id: true } });
+  if (taken) {
+    return NextResponse.json({ error: 'такая ссылка уже занята' }, { status: 409 });
   }
 
   let logo: Buffer | null = null;
@@ -67,23 +70,27 @@ export async function POST(req: Request) {
     logoType = file.type;
   }
 
-  await prisma.project.create({
-    data: { id: SINGLETON_PROJECT_ID, name, slug, logo, logoType },
+  const projectId = await createProjectForUser(user.id, user.login, {
+    name,
+    slug,
+    logo,
+    logoType,
   });
 
-  const state = await getProjectState();
+  const state = await getProjectState(projectId);
   return NextResponse.json({ project: state }, { headers: noStore });
 }
 
 /**
- * Прогресс онбординга и выбор тарифа.
+ * Прогресс онбординга и переименование проекта.
  * `step` только растёт: вернуться назад по цепочке нельзя, шаги уже выполнены.
  */
 export async function PATCH(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const project = await prisma.project.findUnique({ where: { id: SINGLETON_PROJECT_ID } });
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) return NextResponse.json({ error: 'проект не создан' }, { status: 404 });
 
   const body = (await req.json().catch(() => ({}))) as {
@@ -131,9 +138,9 @@ export async function PATCH(req: Request) {
   }
 
   if (Object.keys(data).length > 0) {
-    await prisma.project.update({ where: { id: SINGLETON_PROJECT_ID }, data });
+    await prisma.project.update({ where: { id: projectId }, data });
   }
 
-  const state = await getProjectState();
+  const state = await getProjectState(projectId);
   return NextResponse.json({ project: state }, { headers: noStore });
 }

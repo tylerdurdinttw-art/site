@@ -1,8 +1,8 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { sanitizePermissions } from '@/lib/permissions';
-import { SINGLETON_PROJECT_ID, generateInviteCode, toStaffRow } from '@/lib/project';
-import { requireApiUser } from '@/lib/apiAuth';
+import { generateInviteCode, toStaffRow } from '@/lib/project';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -10,24 +10,27 @@ export const dynamic = 'force-dynamic';
 const noStore = { 'cache-control': 'no-store' };
 
 export async function GET() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const staff = await prisma.staff.findMany({
-    where: { projectId: SINGLETON_PROJECT_ID },
+    where: { projectId },
     orderBy: { invitedAt: 'asc' },
   });
 
   return NextResponse.json({ staff: staff.map(toStaffRow) }, { headers: noStore });
 }
 
-/** Приглашение модератора: имя и контакт. Права выдаются отдельным шагом. */
+/**
+ * Приглашение сотрудника: имя и контакт. Права выдаются отдельным шагом.
+ * Код из ответа человек вводит на /welcome или открывает ссылкой /invite/<код> —
+ * этим он привязывает к записи свою учётку и попадает в проект.
+ */
 export async function POST(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
-
-  const project = await prisma.project.findUnique({ where: { id: SINGLETON_PROJECT_ID } });
-  if (!project) return NextResponse.json({ error: 'проект не создан' }, { status: 404 });
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const body = (await req.json().catch(() => ({}))) as {
     name?: string;
@@ -46,7 +49,7 @@ export async function POST(req: Request) {
 
   const created = await prisma.staff.create({
     data: {
-      projectId: SINGLETON_PROJECT_ID,
+      projectId,
       name,
       contact,
       permissions,

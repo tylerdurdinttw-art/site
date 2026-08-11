@@ -130,12 +130,19 @@ namespace Oxide.Plugins
         private const float ChatFlushIntervalSec = 15f;
         private const float CombatAggregateIntervalSec = 300f;
 
+        // Убийства и смерти уходят пачками, как чат: в замесе их бывает
+        // несколько в секунду, и на каждое отдельным запросом панель
+        // ответила бы 429 — вместе с ним потерялись бы и heartbeat.
+        private const int CombatLogBatchSize = 40;
+        private const float CombatLogFlushIntervalSec = 15f;
+
         private readonly Dictionary<ulong, float> _lastInput = new Dictionary<ulong, float>();
         private readonly Dictionary<ulong, ConnectionInfo> _connections = new Dictionary<ulong, ConnectionInfo>();
         private readonly Dictionary<ulong, CombatStats> _combat = new Dictionary<ulong, CombatStats>();
         private readonly Dictionary<string, ViolationCounter> _violations = new Dictionary<string, ViolationCounter>();
         private readonly Dictionary<ulong, ShotWindow> _shotWindows = new Dictionary<ulong, ShotWindow>();
         private readonly List<object> _chatBuffer = new List<object>();
+        private readonly List<object> _combatLogBuffer = new List<object>();
 
         // Игроки, по которым панель ведёт проверку: их сообщения уходят без задержки,
         // а очередь команд опрашивается чаще. Заполняется командами check/check_banner.
@@ -159,6 +166,7 @@ namespace Oxide.Plugins
         private Timer _queueTimer;
         private Timer _chatTimer;
         private Timer _combatTimer;
+        private Timer _combatLogTimer;
         private Timer _positionTimer;
         private Timer _mapScanTimer;
 
@@ -275,6 +283,8 @@ namespace Oxide.Plugins
             if (_config.AntiCheat.Enabled)
                 _combatTimer = timer.Every(CombatAggregateIntervalSec, AggregateCombat);
 
+            _combatLogTimer = timer.Every(CombatLogFlushIntervalSec, FlushCombatLog);
+
             _positionTimer = timer.Every(Math.Max(2, _config.PositionIntervalSec), SendPositions);
 
             // Рельеф снимаем один раз за вайп, поэтому сначала спрашиваем панель, нужен ли он ей.
@@ -288,11 +298,12 @@ namespace Oxide.Plugins
             _queueTimer?.Destroy();
             _chatTimer?.Destroy();
             _combatTimer?.Destroy();
+            _combatLogTimer?.Destroy();
             _positionTimer?.Destroy();
             _mapScanTimer?.Destroy();
 
             _heartbeatTimer = _commandTimer = _queueTimer = _chatTimer = _combatTimer = null;
-            _positionTimer = _mapScanTimer = null;
+            _positionTimer = _mapScanTimer = _combatLogTimer = null;
             _mapScanRunning = false;
         }
 
@@ -305,6 +316,7 @@ namespace Oxide.Plugins
             if (!IsConfigured) return;
 
             FlushChat();
+            FlushCombatLog();
 
             // Финальный снапшот с пустым списком — панель сразу пометит игроков оффлайн.
             var body = new Dictionary<string, object>
@@ -328,8 +340,9 @@ namespace Oxide.Plugins
 
         private void OnServerSave()
         {
-            // Момент, когда сервер и так «замирает» — удобно слить буфер чата.
+            // Момент, когда сервер и так «замирает» — удобно слить буферы.
             FlushChat();
+            FlushCombatLog();
         }
 
         #endregion
@@ -499,6 +512,21 @@ namespace Oxide.Plugins
             {
                 ["count"] = messages.Count,
                 ["messages"] = messages
+            });
+        }
+
+        /// Одним запросом отдаёт накопленные убийства и смерти — панель разложит их обратно.
+        private void FlushCombatLog()
+        {
+            if (_combatLogBuffer.Count == 0) return;
+
+            var entries = new List<object>(_combatLogBuffer);
+            _combatLogBuffer.Clear();
+
+            SendEvent("combat_log", new Dictionary<string, object>
+            {
+                ["count"] = entries.Count,
+                ["entries"] = entries
             });
         }
 
@@ -1622,10 +1650,44 @@ namespace Oxide.Plugins
 
         private void OnPlayerDeath(BasePlayer player, HitInfo info)
         {
-            if (!_config.AntiCheat.Enabled || player == null || info == null) return;
+            if (player == null || player.IsNpc) return;
 
-            var killer = info.InitiatorPlayer;
-            if (killer == null || killer == player || killer.IsNpc) return;
+            var killer = info?.InitiatorPlayer;
+            bool pvp = killer != null && killer != player && !killer.IsNpc;
+
+            // Смерть и убийство — две отдельные записи: по ним панель считает K/D.
+            // Смерти учитываются любые, а не только от чужой руки, иначе падения
+            // и урон от мира выпадали бы из знаменателя и K/D был бы завышен.
+            _combatLogBuffer.Add(new Dictionary<string, object>
+            {
+                ["kind"] = "death",
+                ["steamId"] = player.UserIDString,
+                ["name"] = player.displayName,
+                ["killerSteamId"] = pvp ? killer.UserIDString : null,
+                ["killerName"] = pvp ? killer.displayName : null,
+                ["pvp"] = pvp,
+                ["timestamp"] = Now()
+            });
+
+            if (pvp)
+            {
+                _combatLogBuffer.Add(new Dictionary<string, object>
+                {
+                    ["kind"] = "kill",
+                    ["steamId"] = killer.UserIDString,
+                    ["name"] = killer.displayName,
+                    ["victimSteamId"] = player.UserIDString,
+                    ["victimName"] = player.displayName,
+                    ["headshot"] = info.isHeadshot,
+                    ["weapon"] = info.Weapon?.ShortPrefabName ?? "unknown",
+                    ["distance"] = Math.Round(Vector3.Distance(killer.transform.position, player.transform.position), 1),
+                    ["timestamp"] = Now()
+                });
+            }
+
+            if (_combatLogBuffer.Count >= CombatLogBatchSize) FlushCombatLog();
+
+            if (!pvp || !_config.AntiCheat.Enabled) return;
 
             var distance = Vector3.Distance(killer.transform.position, player.transform.position);
             var stats = GetCombat(killer.userID);

@@ -3,8 +3,7 @@ import { prisma } from '@/lib/prisma';
 import { queueCommand } from '@/lib/checks';
 import { getSettings } from '@/lib/settings';
 import { CHECK_INVITE_MESSAGE } from '@/lib/checksShared';
-import { PANEL_ADMIN } from '@/lib/bansShared';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -19,11 +18,12 @@ export const dynamic = 'force-dynamic';
 const SERVER_ALIVE_SEC = 120;
 
 export async function POST(_req: Request, { params }: { params: { steamId: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const player = await prisma.player.findUnique({
-    where: { steamId: params.steamId },
+    where: { projectId_steamId: { projectId, steamId: params.steamId } },
     include: { server: true },
   });
 
@@ -33,7 +33,7 @@ export async function POST(_req: Request, { params }: { params: { steamId: strin
 
   // Проверка уже идёт — второй чат не заводим, просто возвращаем текущую.
   const running = await prisma.playerCheck.findFirst({
-    where: { steamId: player.steamId, status: 'active' },
+    where: { projectId, steamId: player.steamId, status: 'active' },
   });
   if (running) {
     return NextResponse.json({
@@ -58,7 +58,7 @@ export async function POST(_req: Request, { params }: { params: { steamId: strin
   }
 
   // «Минимальное кол-во жалоб для начала проверки» из настроек.
-  const settings = await getSettings();
+  const settings = await getSettings(projectId);
   if (player.reportsCount < settings.checks.minReports) {
     return NextResponse.json(
       {
@@ -80,20 +80,23 @@ export async function POST(_req: Request, { params }: { params: { steamId: strin
   // поэтому проверка стартует с уже поднятым баннером — отдельная кнопка не нужна.
   const check = await prisma.playerCheck.create({
     data: {
+      projectId,
       serverId: player.serverId,
       playerId: player.id,
       steamId: player.steamId,
       name: player.name,
-      admin: PANEL_ADMIN,
+      // В журнале проверки должно быть видно, кто именно вызвал игрока.
+      admin: ctx.user.login,
       bannerVisible: true,
     },
   });
 
-  await queueCommand(player.serverId, 'check', player.steamId, CHECK_INVITE_MESSAGE);
+  await queueCommand(projectId, player.serverId, 'check', player.steamId, CHECK_INVITE_MESSAGE);
 
   // «Оповещение о начале проверки игрока в чате» — видит весь сервер.
   if (settings.checks.announceStart) {
     await queueCommand(
+      projectId,
       player.serverId,
       'check_announce',
       player.steamId,

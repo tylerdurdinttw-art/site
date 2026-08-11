@@ -19,15 +19,17 @@ interface BufferedMessage {
   timestamp?: number;
 }
 
-export async function isAnyServerConnected(): Promise<boolean> {
+export async function isAnyServerConnected(projectId: string): Promise<boolean> {
   const since = new Date(Date.now() - SERVER_ONLINE_WINDOW_MS);
-  const count = await prisma.server.count({ where: { lastHeartbeatAt: { gte: since } } });
+  const count = await prisma.server.count({
+    where: { projectId, lastHeartbeatAt: { gte: since } },
+  });
   return count > 0;
 }
 
-export async function listChatMessages(): Promise<ChatMessage[]> {
+export async function listChatMessages(projectId: string): Promise<ChatMessage[]> {
   const events = await prisma.playerEvent.findMany({
-    where: { type: 'chat_message' },
+    where: { projectId, type: 'chat_message' },
     orderBy: { createdAt: 'desc' },
     take: 40,
     include: { server: { select: { name: true } } },
@@ -60,21 +62,26 @@ export async function listChatMessages(): Promise<ChatMessage[]> {
   return messages.slice(-MESSAGE_LIMIT);
 }
 
-export async function getHighlightColor(): Promise<string> {
-  const row = await prisma.panelSetting.findUnique({ where: { key: HIGHLIGHT_COLOR_KEY } });
+export async function getHighlightColor(projectId: string): Promise<string> {
+  const row = await prisma.panelSetting.findUnique({
+    where: { projectId_key: { projectId, key: HIGHLIGHT_COLOR_KEY } },
+  });
   return row?.value ?? DEFAULT_HIGHLIGHT_COLOR;
 }
 
-export async function setHighlightColor(color: string): Promise<string> {
+export async function setHighlightColor(projectId: string, color: string): Promise<string> {
   await prisma.panelSetting.upsert({
-    where: { key: HIGHLIGHT_COLOR_KEY },
-    create: { key: HIGHLIGHT_COLOR_KEY, value: color },
+    where: { projectId_key: { projectId, key: HIGHLIGHT_COLOR_KEY } },
+    create: { projectId, key: HIGHLIGHT_COLOR_KEY, value: color },
     update: { value: color },
   });
   return color;
 }
 
-export async function listKeywords(): Promise<ChatKeyword[]> {
-  const rows = await prisma.chatKeyword.findMany({ orderBy: { createdAt: 'asc' } });
+export async function listKeywords(projectId: string): Promise<ChatKeyword[]> {
+  const rows = await prisma.chatKeyword.findMany({
+    where: { projectId },
+    orderBy: { createdAt: 'asc' },
+  });
   return rows.map((r) => ({ id: r.id, word: r.word }));
 }

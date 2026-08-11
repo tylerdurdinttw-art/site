@@ -27,10 +27,15 @@ export function publish(event: PanelEvent): void {
   bus.emit('event', event);
 }
 
-/** События после указанного id. Если id неизвестен — последние 20. */
-export function eventsSince(lastId: string | null): PanelEvent[] {
-  if (!lastId) return ring.slice(-20);
-  const idx = ring.findIndex((e) => e.id === lastId);
-  if (idx === -1) return ring.slice(-20);
-  return ring.slice(idx + 1);
+/**
+ * События проекта после указанного id. Если id неизвестен — последние 20.
+ * Кольцо общее на процесс, поэтому чужие проекты отсекаются здесь же:
+ * поллинг не должен показывать больше, чем SSE.
+ */
+export function eventsSince(projectId: string, lastId: string | null): PanelEvent[] {
+  const own = ring.filter((e) => e.projectId === projectId);
+  if (!lastId) return own.slice(-20);
+  const idx = own.findIndex((e) => e.id === lastId);
+  if (idx === -1) return own.slice(-20);
+  return own.slice(idx + 1);
 }

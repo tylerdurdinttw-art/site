@@ -134,6 +134,10 @@ export type PanelEventType =
   | 'player_reported'
   | 'player_banned'
   | 'player_unbanned'
+  /** Пачка убийств и смертей от плагина; панель раскладывает её на два типа ниже. */
+  | 'combat_log'
+  | 'player_killed'
+  | 'player_died'
   | 'chat_message'
   | 'violation'
   | 'sign_updated'
@@ -144,6 +148,8 @@ export type PanelEventType =
 export interface PanelEvent {
   id: string;
   type: PanelEventType;
+  /** Проект-владелец: по нему поток событий отсекает чужие проекты. */
+  projectId: string;
   serverId: string;
   serverName: string;
   timestamp: number; // unix seconds

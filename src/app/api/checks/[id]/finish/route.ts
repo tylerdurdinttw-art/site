@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { queueCommand } from '@/lib/checks';
+import { findCheck, queueCommand } from '@/lib/checks';
 import { dropReportsFor } from '@/lib/reports';
 import { getSettings } from '@/lib/settings';
 import {
@@ -10,7 +10,7 @@ import {
   checkResultMessages,
   isCheckOutcome,
 } from '@/lib/checksShared';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -21,10 +21,11 @@ export const dynamic = 'force-dynamic';
  * Записи в таблицу банов панель не делает: плагин пришлёт player_banned сам.
  */
 export async function POST(req: Request, { params }: { params: { id: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const check = await prisma.playerCheck.findUnique({ where: { id: params.id } });
+  const check = await findCheck(projectId, params.id);
   if (!check) return NextResponse.json({ error: 'check not found' }, { status: 404 });
   if (check.status !== 'active') {
     return NextResponse.json({ error: 'Проверка уже завершена.' }, { status: 409 });
@@ -57,16 +58,17 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     reason = given.slice(0, MAX_CHECK_REASON_LENGTH);
   }
 
-  const settings = await getSettings();
+  const settings = await getSettings(projectId);
   const result = checkResultMessages(outcome, reason, check.name);
 
   // Порядок важен: итог игрок должен прочитать до того, как его отключит бан.
-  await queueCommand(check.serverId, 'check_result', check.steamId, result.player);
+  await queueCommand(projectId, check.serverId, 'check_result', check.steamId, result.player);
   if (result.broadcast) {
-    await queueCommand(check.serverId, 'check_announce', check.steamId, result.broadcast);
+    await queueCommand(projectId, check.serverId, 'check_announce', check.steamId, result.broadcast);
   } else if (outcome === 'passed' && settings.checks.announceFinish) {
     // «Оповещение в чате о завершении проверки»: нарушений нет — говорим об этом всем.
     await queueCommand(
+      projectId,
       check.serverId,
       'check_announce',
       check.steamId,
@@ -75,13 +77,13 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
 
   if (outcome === 'ban') {
-    await queueCommand(check.serverId, 'ban', check.steamId, reason);
+    await queueCommand(projectId, check.serverId, 'ban', check.steamId, reason);
   } else if (outcome === 'team_ban') {
-    await queueCommand(check.serverId, 'ban_team', check.steamId, reason);
+    await queueCommand(projectId, check.serverId, 'ban_team', check.steamId, reason);
   }
 
   // Снимает баннер с экрана и выводит игрока из списка «под проверкой» в плагине.
-  await queueCommand(check.serverId, 'check_end', check.steamId, '');
+  await queueCommand(projectId, check.serverId, 'check_end', check.steamId, '');
 
   // Итог остаётся в переписке проверки — видно, что именно ушло игроку.
   await prisma.checkMessage.create({
@@ -100,7 +102,7 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   });
 
   // «Удалять репорты после проверки»: игрока разобрали, старые жалобы больше не нужны.
-  if (settings.reports.deleteAfterCheck) await dropReportsFor(check.steamId);
+  if (settings.reports.deleteAfterCheck) await dropReportsFor(projectId, check.steamId);
 
   return NextResponse.json({ ok: true, outcome, reason });
 }

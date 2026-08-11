@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { ensureRustMap } from '@/lib/rustmaps';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -14,14 +14,16 @@ const SERVER_ONLINE_WINDOW_MS = 90_000;
  * С `serverId` — описание карты: либо картинка с rustmaps, либо запасная сетка высот.
  */
 export async function GET(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const serverId = new URL(req.url).searchParams.get('serverId');
   const since = new Date(Date.now() - SERVER_ONLINE_WINDOW_MS);
 
   if (!serverId) {
     const servers = await prisma.server.findMany({
+      where: { projectId },
       orderBy: { name: 'asc' },
       select: { id: true, name: true, lastHeartbeatAt: true, seed: true, worldSize: true },
     });
@@ -40,8 +42,8 @@ export async function GET(req: Request) {
     );
   }
 
-  const server = await prisma.server.findUnique({
-    where: { id: serverId },
+  const server = await prisma.server.findFirst({
+    where: { id: serverId, projectId },
     select: { id: true, name: true, seed: true, worldSize: true },
   });
   if (!server) return NextResponse.json({ error: 'server not found' }, { status: 404 });

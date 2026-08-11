@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { SINGLETON_PROJECT_ID, getProjectState } from '@/lib/project';
-import { requireApiUser } from '@/lib/apiAuth';
+import { getProjectState } from '@/lib/project';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,11 +11,12 @@ const LOGO_TYPES = new Set(['image/png', 'image/jpeg', 'image/gif']);
 
 /** Логотип проекта из базы. 404 — логотип не загружали, UI рисует заглушку. */
 export async function GET() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
   const project = await prisma.project.findUnique({
-    where: { id: SINGLETON_PROJECT_ID },
+    where: { id: projectId },
     select: { logo: true, logoType: true, updatedAt: true },
   });
 
@@ -32,10 +33,11 @@ export async function GET() {
 
 /** Замена логотипа из раздела «Общее». Тело — multipart/form-data с полем logo. */
 export async function POST(req: Request) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const project = await prisma.project.findUnique({ where: { id: SINGLETON_PROJECT_ID } });
+  const project = await prisma.project.findUnique({ where: { id: projectId } });
   if (!project) return NextResponse.json({ error: 'проект не создан' }, { status: 404 });
 
   const form = await req.formData();
@@ -52,12 +54,12 @@ export async function POST(req: Request) {
   }
 
   await prisma.project.update({
-    where: { id: SINGLETON_PROJECT_ID },
+    where: { id: projectId },
     data: { logo: Buffer.from(await file.arrayBuffer()), logoType: file.type },
   });
 
   return NextResponse.json(
-    { project: await getProjectState() },
+    { project: await getProjectState(projectId) },
     { headers: { 'cache-control': 'no-store' } },
   );
 }

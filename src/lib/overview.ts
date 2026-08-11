@@ -16,13 +16,17 @@ export interface Overview {
  * Пик онлайна за сегодня: максимальное число одновременных сессий.
  * Считается разметкой начал и концов сессий (sweep line), без отдельной таблицы снапшотов.
  */
-async function peakOnlineToday(): Promise<number> {
+async function peakOnlineToday(projectId: string): Promise<number> {
   const dayStart = new Date();
   dayStart.setHours(0, 0, 0, 0);
   const now = new Date();
 
   const sessions = await prisma.playerSession.findMany({
-    where: { OR: [{ endedAt: null }, { endedAt: { gte: dayStart } }], startedAt: { lte: now } },
+    where: {
+      projectId,
+      OR: [{ endedAt: null }, { endedAt: { gte: dayStart } }],
+      startedAt: { lte: now },
+    },
     select: { startedAt: true, endedAt: true },
   });
 
@@ -49,18 +53,18 @@ async function peakOnlineToday(): Promise<number> {
   return peak;
 }
 
-export async function getOverview(): Promise<Overview> {
+export async function getOverview(projectId: string): Promise<Overview> {
   const since = new Date(Date.now() - SERVER_ONLINE_WINDOW_MS);
 
   const [online, serversTotal, serversOnline, queues, peak] = await Promise.all([
-    prisma.player.count({ where: { status: { in: ['online', 'sleeping'] } } }),
-    prisma.server.count(),
-    prisma.server.count({ where: { lastHeartbeatAt: { gte: since } } }),
+    prisma.player.count({ where: { projectId, status: { in: ['online', 'sleeping'] } } }),
+    prisma.server.count({ where: { projectId } }),
+    prisma.server.count({ where: { projectId, lastHeartbeatAt: { gte: since } } }),
     prisma.server.aggregate({
-      where: { lastHeartbeatAt: { gte: since } },
+      where: { projectId, lastHeartbeatAt: { gte: since } },
       _sum: { queuedPlayers: true, joiningPlayers: true },
     }),
-    peakOnlineToday(),
+    peakOnlineToday(projectId),
   ]);
 
   return {
@@ -85,13 +89,13 @@ export interface ServerRow {
   worldSize: number | null;
 }
 
-export async function listServers(): Promise<ServerRow[]> {
+export async function listServers(projectId: string): Promise<ServerRow[]> {
   const since = new Date(Date.now() - SERVER_ONLINE_WINDOW_MS);
 
-  const servers = await prisma.server.findMany({ orderBy: { name: 'asc' } });
+  const servers = await prisma.server.findMany({ where: { projectId }, orderBy: { name: 'asc' } });
   const counts = await prisma.player.groupBy({
     by: ['serverId'],
-    where: { status: { in: ['online', 'sleeping'] } },
+    where: { projectId, status: { in: ['online', 'sleeping'] } },
     _count: { _all: true },
   });
   const countMap = new Map<string, number>(

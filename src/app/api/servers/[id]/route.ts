@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,13 +11,16 @@ export const dynamic = 'force-dynamic';
  * У игроков сервер просто обнуляется, сами игроки остаются.
  */
 export async function DELETE(_req: Request, { params }: { params: { id: string } }) {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const server = await prisma.server.findUnique({ where: { id: params.id } });
+  const server = await prisma.server.findFirst({ where: { id: params.id, projectId } });
   if (!server) return NextResponse.json({ error: 'server not found' }, { status: 404 });
 
-  await prisma.server.delete({ where: { id: params.id } });
+  await prisma.server.delete({ where: { id: server.id } });
+  // Рельеф лежит отдельной таблицей без внешнего ключа — каскад его не заденет.
+  await prisma.serverMap.deleteMany({ where: { serverId: server.id } });
 
   return NextResponse.json({ ok: true }, { headers: { 'cache-control': 'no-store' } });
 }

@@ -277,11 +277,12 @@ npm run dev
 | `SMTP_USER` / `SMTP_PASS` | нет | логин и пароль почтового ящика |
 | `MAIL_FROM` | нет | адрес в поле «От кого» |
 | `SIGNUP_OPEN` | нет | `false` закрывает регистрацию; первую учётку заводят всегда |
-| `GEOLITE2_CITY_DB` | нет | путь к `GeoLite2-City.mmdb`; без неё город и страна остаются пустыми |
-| `GEOLITE2_ASN_DB` | нет | путь к `GeoLite2-ASN.mmdb`; без неё провайдер остаётся пустым |
+| `GEOLITE2_CITY_DB` | нет | путь к `GeoLite2-City.mmdb`; без неё город и страна берутся из запасного источника |
+| `GEOLITE2_ASN_DB` | нет | путь к `GeoLite2-ASN.mmdb`; без неё провайдер берётся из запасного источника |
+| `IP_LOOKUP_FALLBACK` | нет | `off` запрещает ходить в ip-api.com, когда локальных баз нет; по умолчанию `on` |
 | `IP_INFO_TTL_DAYS` | нет | срок жизни кеша `ip_info`, по умолчанию 30 |
 | `VPN_ASN_KEYWORDS` | нет | дополнительные подстроки для признака VPN, через запятую |
-| `STEAM_API_KEY` | нет | ключ Steam Web API; без него часы и VAC/EAC в карточке — прочерки |
+| `STEAM_API_KEY` | нет | ключ Steam Web API; **без него VAC/EAC и часы неизвестны** — карточка так и пишет, значков блокировок не будет |
 | `STEAM_CACHE_TTL_HOURS` | нет | срок жизни кеша `steam_profiles`, по умолчанию 12 |
 | `INGEST_MAX_SKEW_SEC` | нет | допустимый возраст запроса по `X-Timestamp`, по умолчанию 60 |
 | `INGEST_RATE_LIMIT_PER_MIN` | нет | лимит ingest-запросов на сервер, по умолчанию 60 |

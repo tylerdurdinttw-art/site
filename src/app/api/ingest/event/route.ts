@@ -21,6 +21,9 @@ const KNOWN_TYPES: PanelEventType[] = [
   'player_reported',
   'player_banned',
   'player_unbanned',
+  'combat_log',
+  'player_killed',
+  'player_died',
   'chat_message',
   'violation',
   'sign_updated',
@@ -64,24 +67,34 @@ export async function POST(req: Request) {
   const steamId = str(payload, 'steamId');
   const now = new Date();
 
+  // Проект определяется сервером, который подписал запрос: плагин о проектах
+  // ничего не знает и подставить чужой не может.
+  const { projectId } = auth.server;
+
   const player = steamId
-    ? await prisma.player.findUnique({ where: { steamId } })
+    ? await prisma.player.findUnique({ where: { projectId_steamId: { projectId, steamId } } })
     : null;
 
-  await prisma.playerEvent.create({
-    data: {
-      serverId: auth.server.id,
-      playerId: player?.id ?? null,
-      steamId,
-      type: body.type,
-      payload: payload as unknown as Prisma.InputJsonObject,
-    },
-  });
+  // combat_log — только конверт для пачки: в журнал ложатся её строки,
+  // а не сам конверт, иначе лог активности игрока забился бы им впустую.
+  if (body.type !== 'combat_log') {
+    await prisma.playerEvent.create({
+      data: {
+        projectId,
+        serverId: auth.server.id,
+        playerId: player?.id ?? null,
+        steamId,
+        type: body.type,
+        payload: payload as unknown as Prisma.InputJsonObject,
+      },
+    });
+  }
 
   const emit = (type: PanelEventType, eventPayload: Record<string, unknown>) => {
     const event: PanelEvent = {
       id: randomUUID(),
       type,
+      projectId,
       serverId: auth.server.id,
       serverName: auth.server.name,
       timestamp: body.timestamp || Math.floor(Date.now() / 1000),
@@ -102,8 +115,9 @@ export async function POST(req: Request) {
       if (ip) await lookupIp(ip);
 
       const saved = await prisma.player.upsert({
-        where: { steamId },
+        where: { projectId_steamId: { projectId, steamId } },
         create: {
+          projectId,
           steamId,
           name,
           clientType,
@@ -138,7 +152,14 @@ export async function POST(req: Request) {
         });
         if (!open) {
           await prisma.playerSession.create({
-            data: { playerId: saved.id, steamId, serverId: auth.server.id, ip, startedAt: now },
+            data: {
+              projectId,
+              playerId: saved.id,
+              steamId,
+              serverId: auth.server.id,
+              ip,
+              startedAt: now,
+            },
           });
         }
       }
@@ -149,7 +170,7 @@ export async function POST(req: Request) {
       if (ip) {
         const since = new Date(now.getTime() - MULTIACCOUNT_WINDOW_DAYS * 24 * 60 * 60 * 1000);
         const related = await prisma.playerSession.findMany({
-          where: { ip, startedAt: { gte: since }, steamId: { not: steamId } },
+          where: { projectId, ip, startedAt: { gte: since }, steamId: { not: steamId } },
           distinct: ['steamId'],
           select: { steamId: true },
         });
@@ -165,6 +186,7 @@ export async function POST(req: Request) {
           };
           await prisma.playerEvent.create({
             data: {
+              projectId,
               serverId: auth.server.id,
               playerId: saved.id,
               steamId,
@@ -212,6 +234,7 @@ export async function POST(req: Request) {
 
       await prisma.report.create({
         data: {
+          projectId,
           serverId: auth.server.id,
           reporterSteamId,
           reporterName: str(payload, 'reporterName'),
@@ -224,7 +247,7 @@ export async function POST(req: Request) {
       });
 
       await prisma.player.updateMany({
-        where: { steamId: targetSteamId },
+        where: { projectId, steamId: targetSteamId },
         data: { reportsCount: { increment: 1 } },
       });
 
@@ -237,18 +260,19 @@ export async function POST(req: Request) {
       const reason = str(payload, 'reason');
       await prisma.ban.create({
         data: {
+          projectId,
           serverId: auth.server.id,
           steamId,
           name: str(payload, 'name'),
           ip: str(payload, 'ip'),
           reason,
-          admin: await resolveBanAdmin(steamId, reason, now),
+          admin: await resolveBanAdmin(projectId, steamId, reason, now),
         },
       });
 
       // «Удалять репорты после блокировки»: игрок уже наказан, жалобы на него не нужны.
-      const settings = await getSettings();
-      if (settings.reports.deleteAfterBan) await dropReportsFor(steamId);
+      const settings = await getSettings(projectId);
+      if (settings.reports.deleteAfterBan) await dropReportsFor(projectId, steamId);
 
       emit('player_banned', payload);
       break;
@@ -257,10 +281,66 @@ export async function POST(req: Request) {
     case 'player_unbanned': {
       if (!steamId) break;
       await prisma.ban.updateMany({
-        where: { steamId, active: true },
+        where: { projectId, steamId, active: true },
         data: { active: false, unbannedAt: now },
       });
       emit('player_unbanned', payload);
+      break;
+    }
+
+    /**
+     * Пачка убийств и смертей. Каждое PvP-убийство даёт две строки: одну на
+     * убийцу (`player_killed`), другую на погибшего (`player_died`), — так K/D
+     * считается прямым подсчётом строк, без разбора payload соседней записи.
+     * Отдельной таблицы под них нет: события и так лежат в player_events,
+     * а карточка игрока смотрит только на последнюю неделю.
+     */
+    case 'combat_log': {
+      const entries = Array.isArray(payload.entries) ? payload.entries : [];
+      if (entries.length === 0) break;
+
+      // Участники пачки — одним запросом: в замесе одни и те же ники повторяются,
+      // и искать игрока на каждую строку было бы лишним.
+      const actors = new Set<string>();
+      for (const raw of entries) {
+        const actor = raw && typeof raw === 'object' ? str(raw as Record<string, unknown>, 'steamId') : null;
+        if (actor) actors.add(actor);
+      }
+
+      const known = await prisma.player.findMany({
+        where: { projectId, steamId: { in: Array.from(actors) } },
+        select: { id: true, steamId: true },
+      });
+      const playerIds = new Map(known.map((p) => [p.steamId, p.id]));
+
+      const rows: Prisma.PlayerEventCreateManyInput[] = [];
+
+      for (const raw of entries) {
+        if (!raw || typeof raw !== 'object') continue;
+        const entry = raw as Record<string, unknown>;
+
+        const actor = str(entry, 'steamId');
+        if (!actor) continue;
+
+        const kind = str(entry, 'kind');
+        if (kind !== 'kill' && kind !== 'death') continue;
+
+        const at = num(entry, 'timestamp');
+        rows.push({
+          projectId,
+          serverId: auth.server.id,
+          playerId: playerIds.get(actor) ?? null,
+          steamId: actor,
+          type: kind === 'kill' ? 'player_killed' : 'player_died',
+          payload: entry as Prisma.InputJsonObject,
+          // Пачка могла пролежать в буфере плагина до 15 секунд — берём время события.
+          ...(at > 0 ? { createdAt: new Date(at * 1000) } : {}),
+        });
+      }
+
+      if (rows.length > 0) await prisma.playerEvent.createMany({ data: rows });
+
+      emit('combat_log', { count: rows.length });
       break;
     }
 
@@ -285,6 +365,7 @@ export async function POST(req: Request) {
       if (!steamId) break;
       await prisma.violation.create({
         data: {
+          projectId,
           serverId: auth.server.id,
           playerId: player?.id ?? null,
           steamId,
@@ -302,7 +383,7 @@ export async function POST(req: Request) {
     case 'chat_message': {
       const batch = payload.messages;
       if (Array.isArray(batch)) {
-        await recordPlayerMessages(batch as Parameters<typeof recordPlayerMessages>[0]);
+        await recordPlayerMessages(projectId, batch as Parameters<typeof recordPlayerMessages>[1]);
       }
       emit('chat_message', payload);
       break;

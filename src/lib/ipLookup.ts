@@ -30,16 +30,16 @@ const NEIGHBOUR_LIMIT = 20;
  * Соседи собираются из текущего IP игроков и из истории сессий: адрес мог смениться,
  * но совпадение в прошлом — тоже повод присмотреться.
  */
-export async function lookupIpDetails(ip: string): Promise<IpLookup> {
+export async function lookupIpDetails(projectId: string, ip: string): Promise<IpLookup> {
   const [details, current, sessions] = await Promise.all([
     lookupIp(ip),
     prisma.player.findMany({
-      where: { ip },
+      where: { projectId, ip },
       select: { steamId: true, name: true, status: true, lastSeenAt: true },
       take: NEIGHBOUR_LIMIT,
     }),
     prisma.playerSession.findMany({
-      where: { ip },
+      where: { projectId, ip },
       select: { steamId: true },
       distinct: ['steamId'],
       take: NEIGHBOUR_LIMIT,
@@ -63,7 +63,7 @@ export async function lookupIpDetails(ip: string): Promise<IpLookup> {
   const past = sessions.map((s) => s.steamId).filter((steamId) => !byId.has(steamId));
   if (past.length > 0) {
     const rows = await prisma.player.findMany({
-      where: { steamId: { in: past } },
+      where: { projectId, steamId: { in: past } },
       select: { steamId: true, name: true, status: true, lastSeenAt: true },
     });
 

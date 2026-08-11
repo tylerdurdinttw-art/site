@@ -191,7 +191,17 @@ function PlayerPanel({
         {player && <Badge color={MODE_COLOR[player.teamMode]}>{MODE_LABEL[player.teamMode]}</Badge>}
         {player && <Badge color="#22c55e">{(player.language ?? 'n/a').toUpperCase()}</Badge>}
         {player && <Badge color="#3b82f6">{player.ping} ms</Badge>}
-        <Badge color={steam?.vacBanned ? 'var(--danger)' : 'var(--text-dim)'}>VAC</Badge>
+        {/* Значок блокировки вешается только тем, у кого она есть, — иначе он ни о чём не говорит. */}
+        {steam?.available && steam.vacBanned && (
+          <Badge color="var(--danger)">
+            VAC{steam.vacBanCount > 1 ? ` ×${steam.vacBanCount}` : ''}
+          </Badge>
+        )}
+        {steam?.available && steam.gameBanCount > 0 && (
+          <Badge color="var(--danger)">
+            EAC{steam.gameBanCount > 1 ? ` ×${steam.gameBanCount}` : ''}
+          </Badge>
+        )}
         <Badge color={check.active ? '#7dabf8' : 'var(--text-dim)'}>
           {check.active ? 'На проверке' : 'Проверка завершена'}
         </Badge>
@@ -250,9 +260,24 @@ function PlayerPanel({
             ? 'Информация скрыта'
             : formatHours(steam.rustMinutes2Weeks)}
         </Cell>
-        <Cell label="Gamebans / VAC">
-          <span style={{ color: steam?.gameBanCount || steam?.vacBanCount ? 'var(--warning)' : undefined }}>
-            {steam ? `${steam.gameBanCount} / ${steam.vacBanCount}` : DASH}
+        <Cell label="Блокировки">
+          <span
+            style={
+              steam?.available && (steam.vacBanned || steam.gameBanCount > 0)
+                ? { color: 'var(--danger)' }
+                : undefined
+            }
+          >
+            {!steam?.available
+              ? 'Steam не ответил'
+              : steam.vacBanned || steam.gameBanCount > 0
+                ? [
+                    steam.vacBanned ? `VAC: ${steam.vacBanCount || 1}` : null,
+                    steam.gameBanCount > 0 ? `EAC: ${steam.gameBanCount}` : null,
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')
+                : 'Нет'}
           </span>
         </Cell>
         <Cell label="Последнее обновление">{formatDateTime(player?.lastSeenAt ?? null)}</Cell>

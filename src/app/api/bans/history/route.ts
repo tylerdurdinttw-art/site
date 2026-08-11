@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { requireApiUser } from '@/lib/apiAuth';
+import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic';
  * Чтобы действительно разбанить, нужен «Разбанить всех игроков».
  */
 export async function DELETE() {
-  const denied = await requireApiUser();
-  if (denied) return denied;
+  const ctx = await requireApiProject();
+  if (isDenied(ctx)) return ctx;
+  const { projectId } = ctx;
 
-  const removed = await prisma.ban.deleteMany({});
+  const removed = await prisma.ban.deleteMany({ where: { projectId } });
   return NextResponse.json({ ok: true, removed: removed.count });
 }

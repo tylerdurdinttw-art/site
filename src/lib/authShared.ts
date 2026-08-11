@@ -70,4 +70,6 @@ export interface SessionUser {
   login: string;
   email: string;
   role: string;
+  /** Проект, в котором человек работает. null — он его ещё не выбрал. */
+  projectId: string | null;
 }
