@@ -15,7 +15,7 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.3.0")]
+    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.3.1")]
     [Description("Мост между игровым сервером Rust и веб-панелью YnaziCotTV: heartbeat, события, античит-статистика")]
     public class YnaziCotTvBridge : RustPlugin
     {
@@ -2019,14 +2019,16 @@ namespace Oxide.Plugins
                     break;
                 case "ban":
                     EndCheck(command.SteamId);
-                    rust.RunServerCommand("banid", command.SteamId, reason);
+                    BanId(command.SteamId, reason);
                     break;
                 case "ban_team":
                     EndCheck(command.SteamId);
                     BanTeam(command.SteamId, reason);
                     break;
                 case "unban":
-                    rust.RunServerCommand("unbanid", command.SteamId);
+                    // Консольная команда называется `unban`; `unbanid` в Rust нет,
+                    // сервер на неё отвечает «Command 'unbanid' not found».
+                    rust.RunServerCommand("unban", command.SteamId);
                     break;
                 case "check":
                     // Игрока не кикаем и не баним — только показываем предупреждение на экране.
@@ -2055,8 +2057,12 @@ namespace Oxide.Plugins
                     EndCheck(command.SteamId);
                     break;
                 default:
-                    PrintWarning("Неизвестный тип команды: " + command.Type);
-                    return;
+                    // Команду всё равно подтверждаем: иначе панель считает её отправленной,
+                    // а очередь копит её вечно. Обычно это значит, что на сервере лежит
+                    // плагин старее панели — обновите его из раздела «Начало работы».
+                    PrintWarning("Неизвестный тип команды: " + command.Type
+                        + ". Обновите плагин: на сервере " + Version + ".");
+                    break;
             }
 
             Enqueue("/api/ingest/commands/" + command.Id + "/ack", "{}", RequestMethod.POST, null);
@@ -2300,8 +2306,25 @@ namespace Oxide.Plugins
             foreach (var id in ids)
             {
                 EndCheck(id.ToString());
-                rust.RunServerCommand("banid", id.ToString(), reason);
+                BanId(id.ToString(), reason);
             }
+        }
+
+        /// Бан по SteamID. У консольной команды три аргумента — `banid <id> <ник> <причина>`,
+        /// поэтому причину нельзя ставить вторым: она уедет в поле ника, а в бан-листе
+        /// сервера причина останется пустой.
+        private void BanId(string steamId, string reason)
+        {
+            var name = steamId;
+
+            ulong userId;
+            if (ulong.TryParse(steamId, out userId))
+            {
+                var player = BasePlayer.FindByID(userId) ?? BasePlayer.FindSleeping(userId);
+                if (player != null && !string.IsNullOrEmpty(player.displayName)) name = player.displayName;
+            }
+
+            rust.RunServerCommand("banid", steamId, Sanitize(name), Sanitize(reason));
         }
 
         private static BasePlayer FindConnected(string steamId)

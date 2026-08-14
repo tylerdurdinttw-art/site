@@ -55,12 +55,18 @@ export async function requireApiProject(): Promise<ApiContext | NextResponse> {
 
 /**
  * Проверка права сотрудника. Владелец проходит всегда: его права не редактируются
- * и по смыслу полные. Возвращает готовый 403 либо null, если действие разрешено.
+ * и по смыслу полные. Разработчик сайта — тоже: он заходит в проекты как сотрудник,
+ * и урезанный набор прав закрывал бы ему чат, интеграции и настройки в том самом
+ * проекте, который он приехал чинить.
+ *
+ * Возвращает готовый 403 либо null, если действие разрешено.
  */
 export async function requirePermission(
   ctx: ApiContext,
   key: PermissionKey,
 ): Promise<NextResponse | null> {
+  if (isDeveloper(ctx.user.login)) return null;
+
   const staff = await prisma.staff.findFirst({
     where: { projectId: ctx.projectId, userId: ctx.user.id },
     select: { role: true, permissions: true },

@@ -41,12 +41,17 @@ export default function IntegrationsView() {
     void (async () => {
       try {
         const res = await fetch('/api/integrations', { cache: 'no-store' });
-        if (!res.ok) throw new Error(`integrations: ${res.status}`);
-        const body = (await res.json()) as { integrations: Integrations };
+        const body = (await res.json()) as { integrations?: Integrations; error?: string };
+        if (!res.ok || !body.integrations) {
+          // Причину показываем как есть: чаще всего это «Недостаточно прав» у сотрудника
+          // без права «Настройки», и общее «не удалось» только путает.
+          setError(body.error ?? `Не удалось загрузить интеграции (${res.status}).`);
+          return;
+        }
         apply(body.integrations);
       } catch (err) {
         console.error(err);
-        setError('Не удалось загрузить интеграции.');
+        setError('Не удалось загрузить интеграции: панель не отвечает.');
       }
     })();
   }, []);
