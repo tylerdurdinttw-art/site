@@ -15,7 +15,7 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.3.1")]
+    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.4.0")]
     [Description("Мост между игровым сервером Rust и веб-панелью YnaziCotTV: heartbeat, события, античит-статистика")]
     public class YnaziCotTvBridge : RustPlugin
     {
@@ -48,6 +48,23 @@ namespace Oxide.Plugins
             };
         }
 
+        /// Вебхуки Discord. Сообщения уходят прямо отсюда, с игрового сервера:
+        /// панели по пути нет, поэтому её доступ к discord.com не важен — важен только
+        /// доступ этого сервера. Адреса берутся в Discord: настройки канала →
+        /// Интеграции → Вебхуки → Копировать URL.
+        private class DiscordConfig
+        {
+            /// Канал бан-листа: сюда уходят выданные и снятые блокировки. Пусто — не слать.
+            [JsonProperty("BansWebhook")] public string BansWebhook { get; set; } = "";
+            /// Канал репортов: сюда уходят жалобы игроков. Пусто — не слать.
+            [JsonProperty("ReportsWebhook")] public string ReportsWebhook { get; set; } = "";
+            [JsonProperty("NotifyBans")] public bool NotifyBans { get; set; } = true;
+            [JsonProperty("NotifyUnbans")] public bool NotifyUnbans { get; set; } = true;
+            [JsonProperty("NotifyReports")] public bool NotifyReports { get; set; } = true;
+            /// Как подписывать сервер в сообщении. Пусто — берётся hostname сервера.
+            [JsonProperty("ServerName")] public string ServerName { get; set; } = "";
+        }
+
         private class PluginConfig
         {
             // Адрес панели. Если она развёрнута не на localhost — поправьте здесь один раз
@@ -68,6 +85,7 @@ namespace Oxide.Plugins
             [JsonProperty("MapResolution")] public int MapResolution { get; set; } = 512;
             [JsonProperty("AntiCheat")] public AntiCheatConfig AntiCheat { get; set; } = new AntiCheatConfig();
             [JsonProperty("Reports")] public ReportsConfig Reports { get; set; } = new ReportsConfig();
+            [JsonProperty("Discord")] public DiscordConfig Discord { get; set; } = new DiscordConfig();
         }
 
         protected override void LoadDefaultConfig() => _config = new PluginConfig();
@@ -82,6 +100,8 @@ namespace Oxide.Plugins
                 if (_config.Reports == null) _config.Reports = new ReportsConfig();
                 if (_config.Reports.Reasons == null || _config.Reports.Reasons.Count == 0)
                     _config.Reports.Reasons = new ReportsConfig().Reasons;
+                // Секция появилась в 1.4.0 — у старых конфигов её нет, дописываем пустую.
+                if (_config.Discord == null) _config.Discord = new DiscordConfig();
             }
             catch
             {
@@ -539,6 +559,15 @@ namespace Oxide.Plugins
         {
             if (reporter == null) return;
 
+            SendReportEvent(reporter, targetId, targetName, subject, message, type);
+        }
+
+        /// Репорт уходит двумя путями сразу: в панель (там он ложится в таблицу)
+        /// и в Discord, если вебхук указан в конфиге. Через одну точку — чтобы
+        /// нативный F7-репорт и меню /report вели себя одинаково.
+        private void SendReportEvent(BasePlayer reporter, string targetId, string targetName,
+            string subject, string message, string type)
+        {
             SendEvent("player_reported", new Dictionary<string, object>
             {
                 ["steamId"] = reporter.UserIDString,
@@ -550,6 +579,22 @@ namespace Oxide.Plugins
                 ["message"] = message ?? "",
                 ["type"] = type ?? ""
             });
+
+            if (!_config.Discord.NotifyReports) return;
+
+            var fields = new List<object>
+            {
+                DiscordField("На кого", (string.IsNullOrEmpty(targetName) ? targetId : targetName)
+                    + "\n`" + (targetId ?? "—") + "`", true),
+                DiscordField("От кого", reporter.displayName, true),
+                DiscordField("Сервер", DiscordServerName(), true)
+            };
+
+            var reason = string.IsNullOrEmpty(subject) ? type : subject;
+            if (!string.IsNullOrEmpty(reason)) fields.Add(DiscordField("Причина", reason, false));
+            if (!string.IsNullOrEmpty(message)) fields.Add(DiscordField("Комментарий", message, false));
+
+            PostToDiscord(_config.Discord.ReportsWebhook, "Новый репорт", ColorReport, fields);
         }
 
         private void OnUserBanned(string name, string id, string ipAddress, string reason)
@@ -561,6 +606,19 @@ namespace Oxide.Plugins
                 ["ip"] = StripPort(ipAddress),
                 ["reason"] = reason ?? ""
             });
+
+            if (!_config.Discord.NotifyBans) return;
+
+            var fields = new List<object>
+            {
+                DiscordField("Игрок", (string.IsNullOrEmpty(name) ? id : name) + "\n`" + (id ?? "—") + "`", true),
+                DiscordField("Сервер", DiscordServerName(), true),
+                DiscordField("Выдал", WasBannedFromPanel(id) ? "Панель" : "Из игры", true)
+            };
+
+            if (!string.IsNullOrEmpty(reason)) fields.Add(DiscordField("Причина", reason, false));
+
+            PostToDiscord(_config.Discord.BansWebhook, "Новая блокировка", ColorBan, fields);
         }
 
         private void OnUserUnbanned(string name, string id, string ipAddress)
@@ -570,6 +628,14 @@ namespace Oxide.Plugins
                 ["steamId"] = id ?? "",
                 ["name"] = name ?? "",
                 ["ip"] = StripPort(ipAddress)
+            });
+
+            if (!_config.Discord.NotifyUnbans) return;
+
+            PostToDiscord(_config.Discord.BansWebhook, "Блокировка снята", ColorUnban, new List<object>
+            {
+                DiscordField("Игрок", (string.IsNullOrEmpty(name) ? id : name) + "\n`" + (id ?? "—") + "`", true),
+                DiscordField("Сервер", DiscordServerName(), true)
             });
         }
 
@@ -835,17 +901,7 @@ namespace Oxide.Plugins
             PruneReportCooldowns();
 
             // Тот же формат, что у нативного F7-репорта, — панель кладёт оба в одну таблицу.
-            SendEvent("player_reported", new Dictionary<string, object>
-            {
-                ["steamId"] = reporter.UserIDString,
-                ["reporterSteamId"] = reporter.UserIDString,
-                ["reporterName"] = reporter.displayName,
-                ["targetSteamId"] = target.SteamId,
-                ["targetName"] = target.Name ?? "",
-                ["subject"] = reason,
-                ["message"] = state.Message ?? "",
-                ["type"] = reason
-            });
+            SendReportEvent(reporter, target.SteamId, target.Name ?? "", reason, state.Message ?? "", reason);
 
             CloseReportUi(reporter);
             SendReply(reporter, "<color=#22c55e>Репорт отправлен</color> на " + Sanitize(targetName)
@@ -2315,6 +2371,10 @@ namespace Oxide.Plugins
         /// сервера причина останется пустой.
         private void BanId(string steamId, string reason)
         {
+            // Сюда приходят только баны из панели: по этой отметке OnUserBanned
+            // отличит их от бана, выданного руками в консоли сервера.
+            MarkPanelBan(steamId);
+
             var name = steamId;
 
             ulong userId;
@@ -2700,6 +2760,113 @@ namespace Oxide.Plugins
                 ["X-Timestamp"] = timestamp,
                 ["X-Signature"] = HmacSha256Hex(body, _config.ServerSecret)
             };
+        }
+
+        #endregion
+
+        #region Discord
+
+        // Цвета совпадают с разделами панели: бан и репорт красные, снятие бана зелёное.
+        private const int ColorBan = 0xef4444;
+        private const int ColorReport = 0xef4444;
+        private const int ColorUnban = 0x22c55e;
+
+        /// Сколько держим отметку «этот бан пришёл из панели» — дольше, чем идёт
+        /// путь «команда → banid → OnUserBanned», но достаточно коротко, чтобы
+        /// ручной бан того же игрока минутой позже уже не считался панельным.
+        private const double PanelBanMarkSec = 30;
+
+        private readonly Dictionary<string, DateTime> _panelBans = new Dictionary<string, DateTime>();
+
+        /// Подпись сервера в сообщении: имя из конфига, иначе hostname.
+        private string DiscordServerName()
+        {
+            var name = _config.Discord.ServerName;
+            return string.IsNullOrEmpty(name) ? ConVar.Server.hostname : name;
+        }
+
+        private static object DiscordField(string name, string value, bool inline)
+        {
+            return new Dictionary<string, object>
+            {
+                ["name"] = name,
+                // У Discord жёсткий предел на поле — режем, иначе он отвергнет всё сообщение.
+                ["value"] = Trim(value ?? "—", 1024),
+                ["inline"] = inline
+            };
+        }
+
+        private void MarkPanelBan(string steamId)
+        {
+            if (string.IsNullOrEmpty(steamId)) return;
+            _panelBans[steamId] = DateTime.UtcNow;
+        }
+
+        /// Бан только что выдан командой из панели? Заодно чистим протухшие отметки.
+        private bool WasBannedFromPanel(string steamId)
+        {
+            if (string.IsNullOrEmpty(steamId)) return false;
+
+            var stale = _panelBans
+                .Where(pair => (DateTime.UtcNow - pair.Value).TotalSeconds > PanelBanMarkSec)
+                .Select(pair => pair.Key)
+                .ToList();
+            foreach (var key in stale) _panelBans.Remove(key);
+
+            // Отметка одноразовая: следующий бан того же игрока считается новым.
+            return _panelBans.Remove(steamId);
+        }
+
+        /// Сообщение в Discord — напрямую с игрового сервера, мимо панели и мимо её очереди.
+        ///
+        /// Очередь панели тут не годится: у неё свой хост, подпись HMAC ключами сервера
+        /// и ретраи, а Discord ничего этого не понимает. Недоставленное сообщение просто
+        /// теряется с предупреждением в консоли: уведомление не повод копить очередь.
+        private void PostToDiscord(string webhookUrl, string title, int color, List<object> fields)
+        {
+            if (string.IsNullOrEmpty(webhookUrl)) return;
+
+            if (!webhookUrl.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || webhookUrl.IndexOf("/api/webhooks/", StringComparison.OrdinalIgnoreCase) < 0)
+            {
+                PrintWarning("Discord: адрес вебхука не похож на настоящий, сообщение не отправлено. "
+                             + "Скопируйте URL в настройках канала: Интеграции → Вебхуки.");
+                return;
+            }
+
+            var embed = new Dictionary<string, object>
+            {
+                ["title"] = title,
+                ["color"] = color,
+                ["fields"] = fields,
+                ["footer"] = new Dictionary<string, object> { ["text"] = "YnaziCotTV" },
+                ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+            };
+
+            var body = JsonConvert.SerializeObject(new Dictionary<string, object>
+            {
+                ["username"] = "YnaziCotTV",
+                ["embeds"] = new List<object> { embed }
+            });
+
+            var headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" };
+
+            webrequest.Enqueue(webhookUrl, body, (code, response) =>
+            {
+                // Вебхук отвечает 204 без тела; всё остальное стоит показать администратору.
+                if (code >= 200 && code < 300) return;
+
+                if (code == 401 || code == 403 || code == 404)
+                    PrintWarning("Discord: вебхука больше нет (код " + code
+                                 + "). Создайте его заново в настройках канала и впишите новый адрес в конфиг.");
+                else if (code == 429)
+                    PrintWarning("Discord: слишком часто (429), сообщение придержано.");
+                else if (code == 0)
+                    PrintWarning("Discord: нет ответа. С этого сервера не открывается discord.com — "
+                                 + "проверьте блокировки и фаервол.");
+                else
+                    PrintWarning("Discord: код " + code + ". " + Trim(response ?? "", 200));
+            }, this, RequestMethod.POST, headers, 10f);
         }
 
         #endregion

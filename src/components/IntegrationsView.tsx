@@ -1,208 +1,149 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Check, Loader2, Send } from 'lucide-react';
-import { Row, Section, SettingsPage, Toggle } from '@/components/SettingsControls';
+import { useState } from 'react';
+import { Check, Copy, Plug } from 'lucide-react';
+import { Section, SettingsPage } from '@/components/SettingsControls';
 import { APP_NAME } from '@/lib/brand';
-import {
-  DISCORD_CHANNELS,
-  isDiscordWebhook,
-  type DiscordChannel,
-  type DiscordChannelKey,
-  type Integrations,
-} from '@/lib/integrationsShared';
 
 /**
- * Раздел «Интеграции». Каналов Discord два — бан-лист и репорты: их обычно
- * разводят по разным каналам сервера, поэтому вебхук у каждого свой.
- * Адрес сохраняется по уходу фокуса, как в остальных настройках.
+ * Раздел «Интеграции».
+ *
+ * Вебхуки Discord живут в конфиге плагина, а не здесь: сообщения уходят прямо
+ * с игрового сервера, минуя панель. Так уведомления работают и там, где у самой
+ * панели нет доступа к discord.com — а это ровно тот случай, ради которого всё
+ * и переносилось. Хранить адрес в панели, чтобы потом отдавать его плагину,
+ * смысла нет: он всё равно нужен на игровом сервере.
  */
-export default function IntegrationsView() {
-  const [integrations, setIntegrations] = useState<Integrations | null>(null);
-  /** Черновики полей: пока фокус в поле, значение живёт здесь, а не в настройках. */
-  const [drafts, setDrafts] = useState<Record<DiscordChannelKey, string>>({
-    bans: '',
-    reports: '',
-  });
-  const [saving, setSaving] = useState<DiscordChannelKey | null>(null);
-  const [saved, setSaved] = useState<DiscordChannelKey | null>(null);
-  const [testing, setTesting] = useState<DiscordChannelKey | null>(null);
-  const [results, setResults] = useState<
-    Partial<Record<DiscordChannelKey, { ok: boolean; text: string }>>
-  >({});
-  const [error, setError] = useState<string | null>(null);
 
-  const apply = (next: Integrations) => {
-    setIntegrations(next);
-    setDrafts({ bans: next.discord.bans.webhookUrl, reports: next.discord.reports.webhookUrl });
-  };
+const CONFIG_PATH = 'oxide/config/YnaziCotTvBridge.json';
 
-  useEffect(() => {
-    void (async () => {
-      try {
-        const res = await fetch('/api/integrations', { cache: 'no-store' });
-        const body = (await res.json()) as { integrations?: Integrations; error?: string };
-        if (!res.ok || !body.integrations) {
-          // Причину показываем как есть: чаще всего это «Недостаточно прав» у сотрудника
-          // без права «Настройки», и общее «не удалось» только путает.
-          setError(body.error ?? `Не удалось загрузить интеграции (${res.status}).`);
-          return;
-        }
-        apply(body.integrations);
-      } catch (err) {
-        console.error(err);
-        setError('Не удалось загрузить интеграции: панель не отвечает.');
-      }
-    })();
-  }, []);
+const SNIPPET = `"Discord": {
+  "BansWebhook": "https://discord.com/api/webhooks/...",
+  "ReportsWebhook": "https://discord.com/api/webhooks/...",
+  "NotifyBans": true,
+  "NotifyUnbans": true,
+  "NotifyReports": true,
+  "ServerName": ""
+}`;
 
-  const patch = async (channel: DiscordChannelKey, value: Partial<DiscordChannel>) => {
-    setSaving(channel);
-    setError(null);
+/** Кнопка «скопировать» у блока кода. */
+function CopyButton({ text }: { text: string }) {
+  const [done, setDone] = useState(false);
+
+  const copy = async () => {
     try {
-      const res = await fetch('/api/integrations', {
-        method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ discord: { [channel]: value } }),
-      });
-      const body = (await res.json()) as { integrations?: Integrations; error?: string };
-      if (!res.ok || !body.integrations) {
-        setError(body.error ?? 'Не удалось сохранить.');
-        return;
-      }
-      apply(body.integrations);
-      setSaved(channel);
-      setTimeout(() => setSaved((current) => (current === channel ? null : current)), 2000);
+      await navigator.clipboard.writeText(text);
+      setDone(true);
+      setTimeout(() => setDone(false), 2000);
     } catch (err) {
       console.error(err);
-      setError('Панель не отвечает.');
-    } finally {
-      setSaving(null);
-    }
-  };
-
-  const saveWebhook = (channel: DiscordChannelKey) => {
-    const value = drafts[channel].trim();
-    if (value === (integrations?.discord[channel].webhookUrl ?? '')) return;
-    if (value && !isDiscordWebhook(value)) {
-      setError('Это не похоже на вебхук Discord. Скопируйте адрес из настроек канала.');
-      return;
-    }
-    void patch(channel, { webhookUrl: value });
-  };
-
-  const sendTest = async (channel: DiscordChannelKey) => {
-    setTesting(channel);
-    setResults((current) => ({ ...current, [channel]: undefined }));
-    try {
-      const res = await fetch('/api/integrations/test', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ channel, webhookUrl: drafts[channel].trim() }),
-      });
-      const body = (await res.json()) as { error?: string };
-      setResults((current) => ({
-        ...current,
-        [channel]: res.ok
-          ? { ok: true, text: 'Сообщение ушло — проверьте канал.' }
-          : { ok: false, text: body.error ?? 'Не доставлено.' },
-      }));
-    } catch (err) {
-      console.error(err);
-      setResults((current) => ({ ...current, [channel]: { ok: false, text: 'Панель не отвечает.' } }));
-    } finally {
-      setTesting(null);
     }
   };
 
   return (
-    <SettingsPage title="Интеграции" note={`Куда ${APP_NAME} отправляет события проекта`}>
-      {DISCORD_CHANNELS.map(({ key, title, toggle, hint }) => {
-        const bound = Boolean(integrations?.discord[key].webhookUrl);
-        const canTest = bound || isDiscordWebhook(drafts[key].trim());
-        const result = results[key];
+    <button
+      type="button"
+      onClick={() => void copy()}
+      aria-label="Скопировать"
+      className="btn-ghost shrink-0 px-2.5 py-1.5 text-[12px]"
+    >
+      {done ? <Check size={13} style={{ color: 'var(--success)' }} /> : <Copy size={13} />}
+      {done ? 'Скопировано' : 'Копировать'}
+    </button>
+  );
+}
 
-        return (
-          <Section key={key} title={`Discord · ${title}`}>
-            <div className="rounded-plate bg-surface px-4 py-3">
-              <div className="flex items-center gap-3">
-                <div className="min-w-0 flex-1">
-                  <div className="text-[13px]">Вебхук канала</div>
-                  <div className="mt-0.5 text-[12px] text-text-dim">
-                    Настройки канала → Интеграции → Вебхуки → Копировать URL
-                  </div>
-                </div>
-                {saving === key && (
-                  <Loader2 size={14} className="shrink-0 animate-spin text-text-muted" />
-                )}
-                {saved === key && saving !== key && (
-                  <Check size={14} className="shrink-0" style={{ color: 'var(--success)' }} />
-                )}
-              </div>
+function Step({ n, title, children }: { n: number; title: string; children?: React.ReactNode }) {
+  return (
+    <div className="flex gap-3 rounded-plate bg-surface px-4 py-3">
+      <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-surface-hover text-[11px] font-semibold text-text-muted">
+        {n}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="text-[13px]">{title}</div>
+        {children && <div className="mt-2">{children}</div>}
+      </div>
+    </div>
+  );
+}
 
-              <div className="mt-3 flex flex-wrap items-center gap-2">
-                <input
-                  className="field min-w-[220px] flex-1 font-mono text-[12px]"
-                  placeholder="https://discord.com/api/webhooks/..."
-                  value={drafts[key]}
-                  disabled={!integrations}
-                  onChange={(e) => {
-                    const { value } = e.target;
-                    setDrafts((current) => ({ ...current, [key]: value }));
-                    setError(null);
-                  }}
-                  onBlur={() => saveWebhook(key)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') e.currentTarget.blur();
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => void sendTest(key)}
-                  disabled={!canTest || testing === key}
-                  className="btn-ghost shrink-0 px-3 py-2 text-[12px]"
-                >
-                  {testing === key ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Send size={13} />
-                  )}
-                  Отправить тест
-                </button>
-              </div>
-
-              {result && (
-                <div
-                  className="mt-2 text-[12px]"
-                  style={{ color: result.ok ? 'var(--success)' : 'var(--danger)' }}
-                >
-                  {result.text}
-                </div>
-              )}
-            </div>
-
-            <Row
-              label={toggle}
-              hint={hint}
-              disabled={!bound}
-              control={
-                <Toggle
-                  label={toggle}
-                  checked={integrations?.discord[key].enabled ?? true}
-                  disabled={!bound || saving === key}
-                  onChange={(enabled) => void patch(key, { enabled })}
-                />
-              }
-            />
-          </Section>
-        );
-      })}
-
-      {error && (
-        <div className="text-[12px]" style={{ color: 'var(--danger)' }}>
-          {error}
+export default function IntegrationsView() {
+  return (
+    <SettingsPage
+      title="Интеграции"
+      note={`Куда ${APP_NAME} отправляет события проекта`}
+    >
+      <Section title="Discord">
+        <div className="flex gap-3 rounded-plate bg-surface px-4 py-3">
+          <Plug size={15} className="mt-0.5 shrink-0" style={{ color: '#a78bfa' }} />
+          <p className="text-[13px] leading-relaxed text-text-muted">
+            Сообщения в Discord отправляет плагин — прямо с игрового сервера, минуя панель.
+            Поэтому и адреса вебхуков указываются в его конфиге: они нужны там, где уходит
+            запрос. Уведомления работают, даже если у самой панели нет доступа к discord.com.
+          </p>
         </div>
-      )}
+
+        <Step n={1} title="Создайте вебхуки в Discord">
+          <p className="text-[12px] leading-relaxed text-text-dim">
+            Настройки канала → Интеграции → Вебхуки → Создать вебхук → Копировать URL.
+            Каналов удобно завести два: бан-лист смотрит администрация, репорты читают модераторы.
+          </p>
+        </Step>
+
+        <Step n={2} title="Впишите адреса в конфиг плагина">
+          <p className="mb-2 text-[12px] leading-relaxed text-text-dim">
+            Файл <span className="font-mono text-text-muted">{CONFIG_PATH}</span> на игровом
+            сервере, секция <span className="font-mono text-text-muted">Discord</span>. Пустая
+            строка — канал выключен.
+          </p>
+          <div className="rounded-control border border-border bg-bg-sidebar">
+            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">
+                {CONFIG_PATH}
+              </span>
+              <CopyButton text={SNIPPET} />
+            </div>
+            <pre className="overflow-x-auto scrollbar-thin px-3 py-2.5 font-mono text-[11px] leading-relaxed text-text-muted">
+              {SNIPPET}
+            </pre>
+          </div>
+        </Step>
+
+        <Step n={3} title="Перезагрузите плагин">
+          <p className="text-[12px] leading-relaxed text-text-dim">
+            В консоли сервера: <span className="font-mono text-text-muted">oxide.reload YnaziCotTvBridge</span>.
+            Первый же бан или репорт уйдёт в канал. Если что-то не так, плагин напишет
+            причину в консоль — например, что с сервера не открывается discord.com.
+          </p>
+        </Step>
+      </Section>
+
+      <Section title="Что уходит в каналы">
+        <div className="overflow-hidden rounded-plate bg-surface">
+          <table className="w-full border-collapse text-[12px]">
+            <tbody>
+              {[
+                ['BansWebhook', 'Новая блокировка: игрок, сервер, причина и кто выдал — панель или консоль сервера'],
+                ['BansWebhook', 'Снятие блокировки: игрок и сервер'],
+                ['ReportsWebhook', 'Жалоба игрока: на кого, от кого, причина и комментарий'],
+              ].map(([key, what], i) => (
+                <tr key={i} className="border-b border-border last:border-b-0">
+                  <td className="whitespace-nowrap px-4 py-2.5 align-top font-mono text-[11px] text-text-muted">
+                    {key}
+                  </td>
+                  <td className="px-4 py-2.5 text-text-muted">{what}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+        <p className="px-1 pt-1 text-[12px] leading-relaxed text-text-dim">
+          Выключить любое из трёх можно флагами{' '}
+          <span className="font-mono">NotifyBans</span>,{' '}
+          <span className="font-mono">NotifyUnbans</span> и{' '}
+          <span className="font-mono">NotifyReports</span>, не стирая адрес.
+        </p>
+      </Section>
     </SettingsPage>
   );
 }

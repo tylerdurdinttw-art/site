@@ -9,7 +9,6 @@ import { publish } from '@/lib/eventBus';
 import { recordPlayerMessages } from '@/lib/checks';
 import { resolveBanAdmin } from '@/lib/bans';
 import { dropReportsFor } from '@/lib/reports';
-import { notifyBan, notifyReport, notifyUnban } from '@/lib/integrations';
 import { getSettings } from '@/lib/settings';
 import type { IngestEventBody, PanelEvent, PanelEventType } from '@/lib/types';
 
@@ -252,17 +251,8 @@ export async function POST(req: Request) {
         data: { reportsCount: { increment: 1 } },
       });
 
-      // Дискорд-вебхук, если он привязан в «Интеграциях». Ошибки внутри гасятся:
-      // недоступный канал не должен ломать приём события с игрового сервера.
-      await notifyReport(projectId, {
-        targetName: str(payload, 'targetName') ?? targetSteamId,
-        targetSteamId,
-        reporterName: str(payload, 'reporterName') ?? reporterSteamId,
-        subject: str(payload, 'subject') ?? str(payload, 'type'),
-        message: str(payload, 'message'),
-        serverName: auth.server.name,
-      });
-
+      // Вебхук Discord шлёт сам плагин, прямо с игрового сервера: панель к discord.com
+      // не ходит вовсе (см. раздел «Интеграции» и секцию Discord в конфиге плагина).
       emit('player_reported', payload);
       break;
     }
@@ -288,16 +278,6 @@ export async function POST(req: Request) {
       const settings = await getSettings(projectId);
       if (settings.reports.deleteAfterBan) await dropReportsFor(projectId, steamId);
 
-      // Вебхук бан-листа из «Интеграций». Ошибки внутри гасятся: недоступный
-      // канал не должен ломать приём события с игрового сервера.
-      await notifyBan(projectId, {
-        name: str(payload, 'name') ?? player?.name ?? steamId,
-        steamId,
-        reason,
-        admin,
-        serverName: auth.server.name,
-      });
-
       emit('player_banned', payload);
       break;
     }
@@ -307,12 +287,6 @@ export async function POST(req: Request) {
       await prisma.ban.updateMany({
         where: { projectId, steamId, active: true },
         data: { active: false, unbannedAt: now },
-      });
-
-      await notifyUnban(projectId, {
-        name: str(payload, 'name') ?? player?.name ?? steamId,
-        steamId,
-        serverName: auth.server.name,
       });
 
       emit('player_unbanned', payload);
