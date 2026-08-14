@@ -6,6 +6,12 @@
 export const DEFAULT_HIGHLIGHT_COLOR = '#ff4444';
 export const HIGHLIGHT_COLOR_KEY = 'chat.highlightColor';
 
+/** Длиннее в игровой чат отправлять бессмысленно — строка не поместится на экран. */
+export const MAX_CHAT_MESSAGE_LENGTH = 240;
+
+/** Канал, которым помечены реплики самой панели. */
+export const PANEL_CHANNEL = 'PANEL';
+
 export interface ChatMessage {
   id: string;
   steamId: string | null;

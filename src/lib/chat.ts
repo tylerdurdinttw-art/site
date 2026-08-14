@@ -78,6 +78,63 @@ export async function setHighlightColor(projectId: string, color: string): Promi
   return color;
 }
 
+/**
+ * Сообщение из панели в игровой чат.
+ *
+ * Команда `say` кладётся каждому живому серверу проекта (или одному выбранному),
+ * а её копия сразу пишется в ленту событием chat_message — иначе автор не увидел бы
+ * собственную реплику до следующего опроса плагина.
+ *
+ * Возвращает, на сколько серверов ушло: ноль означает, что ни один плагин не на связи.
+ */
+export async function sendChatMessage(
+  projectId: string,
+  author: string,
+  text: string,
+  serverId?: string | null,
+): Promise<number> {
+  const since = new Date(Date.now() - SERVER_ONLINE_WINDOW_MS);
+
+  const servers = await prisma.server.findMany({
+    where: {
+      projectId,
+      lastHeartbeatAt: { gte: since },
+      ...(serverId ? { id: serverId } : {}),
+    },
+    select: { id: true },
+  });
+  if (servers.length === 0) return 0;
+
+  const timestamp = Math.floor(Date.now() / 1000);
+
+  await prisma.$transaction([
+    prisma.serverCommand.createMany({
+      data: servers.map((server) => ({
+        projectId,
+        serverId: server.id,
+        type: 'say',
+        // Команда не про конкретного игрока, но поле в схеме обязательное.
+        steamId: '0',
+        reason: `${author}: ${text}`,
+      })),
+    }),
+    prisma.playerEvent.createMany({
+      data: servers.map((server) => ({
+        projectId,
+        serverId: server.id,
+        type: 'chat_message',
+        payload: {
+          messages: [
+            { steamId: null, name: author, channel: 'PANEL', message: text, timestamp },
+          ],
+        },
+      })),
+    }),
+  ]);
+
+  return servers.length;
+}
+
 export async function listKeywords(projectId: string): Promise<ChatKeyword[]> {
   const rows = await prisma.chatKeyword.findMany({
     where: { projectId },

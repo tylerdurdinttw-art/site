@@ -1,14 +1,47 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { Check, Copy, Loader2, Plus, Trash2 } from 'lucide-react';
+import { Check, Copy, Loader2, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import PageTopBar from '@/components/PageTopBar';
 import { copyText } from '@/lib/clipboard';
 import { PERMISSIONS } from '@/lib/permissions';
-import type { StaffRow } from '@/lib/projectShared';
+import { isOwner, membersOnly, type StaffRow } from '@/lib/projectShared';
+
+/**
+ * Карточка владельца. Прав у него полный набор, и он тут только для справки:
+ * ни снять права, ни убрать самого владельца из проекта нельзя.
+ */
+function OwnerCard({ owner }: { owner: StaffRow }) {
+  return (
+    <div className="rounded-control border border-border bg-surface p-4">
+      <div className="flex items-center gap-3">
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-hover text-[12px] font-semibold text-text-muted">
+          {owner.name.slice(0, 1).toUpperCase()}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="truncate text-[13px] font-semibold">{owner.name}</span>
+            <span
+              className="shrink-0 rounded-plate px-1.5 py-0.5 text-[11px] font-medium"
+              style={{ backgroundColor: 'rgba(245,158,11,0.16)', color: '#f59e0b' }}
+            >
+              Владелец
+            </span>
+          </div>
+          <div className="truncate text-[12px] text-text-muted">
+            {owner.contact || 'создатель проекта'} · полный доступ ко всем разделам
+          </div>
+        </div>
+        <ShieldCheck size={15} className="shrink-0 text-text-dim" />
+      </div>
+    </div>
+  );
+}
 
 export default function StaffView({ initialStaff }: { initialStaff: StaffRow[] }) {
   const [staff, setStaff] = useState(initialStaff);
+  const owner = staff.find(isOwner) ?? null;
+  const members = membersOnly(staff);
   const [name, setName] = useState('');
   const [contact, setContact] = useState('');
   const [busy, setBusy] = useState(false);
@@ -119,13 +152,15 @@ export default function StaffView({ initialStaff }: { initialStaff: StaffRow[] }
         )}
 
         <div className="mt-6 space-y-3">
-          {staff.length === 0 && (
+          {owner && <OwnerCard owner={owner} />}
+
+          {members.length === 0 && (
             <div className="rounded-control border border-border py-16 text-center text-[13px] text-text-muted">
               В проекте пока только вы
             </div>
           )}
 
-          {staff.map((member) => (
+          {members.map((member) => (
             <div key={member.id} className="rounded-control border border-border bg-surface p-4">
               <div className="flex items-center gap-3">
                 <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-hover text-[12px] font-semibold text-text-muted">

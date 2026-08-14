@@ -3,7 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { Inbox } from 'lucide-react';
 import Avatar from '@/components/Avatar';
-import type { ChatMessage } from '@/lib/chatShared';
+import { PANEL_CHANNEL, type ChatMessage } from '@/lib/chatShared';
 
 interface Props {
   messages: ChatMessage[];
@@ -35,6 +35,8 @@ function Row({
   highlightColor: string;
 }) {
   const flagged = hasKeyword(message.message, keywords);
+  // Реплики самой панели отделяем цветом ника: в ленте они идут вперемешку с игроками.
+  const fromPanel = message.channel === PANEL_CHANNEL;
 
   return (
     <div className="flex items-start gap-3 rounded-control px-3 py-2 transition-colors hover:bg-surface">
@@ -42,7 +44,12 @@ function Row({
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-2">
-          <span className="text-[13px] font-semibold">{message.name}</span>
+          <span
+            className="text-[13px] font-semibold"
+            style={fromPanel ? { color: 'var(--accent)' } : undefined}
+          >
+            {message.name}
+          </span>
           <span className="text-[11px] text-text-dim">[{message.channel}]</span>
           <span className="truncate text-[11px] text-text-dim">{message.serverName}</span>
           <span className="ml-auto shrink-0 font-mono text-[11px] text-text-dim">

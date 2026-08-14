@@ -7,3 +7,6 @@ export const PANEL_DOMAIN = 'quickpanel.com';
 
 /** Готовый префикс для полей со ссылкой проекта. */
 export const PROJECT_URL_PREFIX = `${PANEL_DOMAIN}/`;
+
+/** Куда идти за продлением доступа — раздел «Продление» и экран блокировки. */
+export const SUPPORT_DISCORD_URL = 'https://discord.gg/HBu8nfwPSJ';

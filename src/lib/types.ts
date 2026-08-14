@@ -223,6 +223,7 @@ export interface PanelCommand {
    * check_pm — личное сообщение от панели только этому игроку;
    * check_result — итог проверки лично игроку;
    * check_announce — объявление об итоге на весь сервер;
+   * say — реплика панели в общий чат сервера, steamId не используется;
    * check_end — проверка закрыта: снять баннер и перестать следить за игроком;
    * ban_team — бан всей команды игрока;
    * unban — снятие бана из раздела «Баны».
@@ -238,7 +239,8 @@ export interface PanelCommand {
     | 'check_pm'
     | 'check_result'
     | 'check_announce'
-    | 'check_end';
+    | 'check_end'
+    | 'say';
   steamId: string;
   /** Для kick/ban — причина, для check/check_banner/check_pm — текст для игрока. */
   reason: string;

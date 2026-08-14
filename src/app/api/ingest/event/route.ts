@@ -9,6 +9,7 @@ import { publish } from '@/lib/eventBus';
 import { recordPlayerMessages } from '@/lib/checks';
 import { resolveBanAdmin } from '@/lib/bans';
 import { dropReportsFor } from '@/lib/reports';
+import { notifyReport } from '@/lib/integrations';
 import { getSettings } from '@/lib/settings';
 import type { IngestEventBody, PanelEvent, PanelEventType } from '@/lib/types';
 
@@ -249,6 +250,17 @@ export async function POST(req: Request) {
       await prisma.player.updateMany({
         where: { projectId, steamId: targetSteamId },
         data: { reportsCount: { increment: 1 } },
+      });
+
+      // Дискорд-вебхук, если он привязан в «Интеграциях». Ошибки внутри гасятся:
+      // недоступный канал не должен ломать приём события с игрового сервера.
+      await notifyReport(projectId, {
+        targetName: str(payload, 'targetName') ?? targetSteamId,
+        targetSteamId,
+        reporterName: str(payload, 'reporterName') ?? reporterSteamId,
+        subject: str(payload, 'subject') ?? str(payload, 'type'),
+        message: str(payload, 'message'),
+        serverName: auth.server.name,
       });
 
       emit('player_reported', payload);

@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import { prisma } from '@/lib/prisma';
+import { accessStateOf, type AccessState } from '@/lib/accessShared';
 import { ALL_PERMISSION_KEYS } from '@/lib/permissions';
 import type { ProjectState, StaffRow } from '@/lib/projectShared';
 
@@ -27,7 +28,9 @@ export function toStaffRow(row: {
     name: row.name,
     contact: row.contact,
     role: row.role,
-    permissions: row.permissions,
+    // У владельца права полные всегда: если в базе осталась урезанная строка от
+    // старых версий панели, показываем и отдаём набор целиком.
+    permissions: row.role === 'owner' ? [...ALL_PERMISSION_KEYS] : row.permissions,
     inviteCode: row.inviteCode,
     invitedAt: row.invitedAt.toISOString(),
     acceptedAt: row.acceptedAt?.toISOString() ?? null,
@@ -57,7 +60,20 @@ export async function getProjectState(projectId: string | null): Promise<Project
     done: project.onboardingDone,
     serversCount,
     staff: project.staff.map(toStaffRow),
+    access: accessStateOf(project.accessExpiresAt),
   };
+}
+
+/**
+ * Открыт ли проекту доступ. Отдельный запрос на одно поле: страницам и
+ * эндпоинтам нужен только ответ «да/нет», тянуть ради него весь проект незачем.
+ */
+export async function projectAccess(projectId: string): Promise<AccessState> {
+  const row = await prisma.project.findUnique({
+    where: { id: projectId },
+    select: { accessExpiresAt: true },
+  });
+  return accessStateOf(row?.accessExpiresAt ?? null);
 }
 
 /**

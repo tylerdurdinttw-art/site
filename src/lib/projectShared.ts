@@ -1,5 +1,7 @@
 /** Общее для сервера и браузера: в этот модуль не тянется prisma. */
 
+import type { AccessState } from '@/lib/accessShared';
+
 /** Шаги «Начала работы» — цепочка, следующий открыт только после предыдущего. */
 export const ONBOARDING_STEPS = 4;
 
@@ -47,4 +49,16 @@ export interface ProjectState {
   /** Подключён ли хотя бы один сервер — первый шаг цепочки проверяется по факту. */
   serversCount: number;
   staff: StaffRow[];
+  /** Оплаченный срок: пока он не активен, разделы панели закрыты. */
+  access: AccessState;
+}
+
+/** Владелец проекта — он ровно один и правится только через базу. */
+export function isOwner(member: StaffRow): boolean {
+  return member.role === 'owner';
+}
+
+/** Сотрудники без владельца: приглашения и права касаются только их. */
+export function membersOnly(staff: StaffRow[]): StaffRow[] {
+  return staff.filter((member) => !isOwner(member));
 }

@@ -37,6 +37,14 @@ export async function PATCH(req: Request, { params }: { params: { id: string } }
     data.contact = body.contact.trim().slice(0, 64) || null;
   }
   if (body.permissions !== undefined) {
+    // Права владельца полные по определению: снять их нельзя даже ему самому,
+    // иначе проект остался бы без того, кто может выдать их обратно.
+    if (staff.role === 'owner') {
+      return NextResponse.json(
+        { error: 'Права владельца проекта менять нельзя.' },
+        { status: 409 },
+      );
+    }
     data.permissions = sanitizePermissions(body.permissions);
   }
 

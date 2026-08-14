@@ -6,12 +6,14 @@ import { useEffect, useMemo, useState } from 'react';
 import {
   Ban,
   Building2,
+  CalendarClock,
   ChevronDown,
   HardDrive,
   LogOut,
   Map,
   MessageSquare,
   PanelLeft,
+  Plug,
   Rocket,
   Search,
   Settings,
@@ -57,6 +59,7 @@ const GROUPS: Group[] = [
     title: 'Управление',
     items: [
       { label: 'Серверы', icon: HardDrive, color: '#93a4c0', href: '/servers' },
+      { label: 'Интеграции', icon: Plug, color: '#a78bfa', href: '/integrations' },
       { label: 'Настройки', icon: Settings, color: '#d4d4d8', href: '/settings' },
     ],
   },
@@ -65,22 +68,25 @@ const GROUPS: Group[] = [
     items: [
       { label: 'Общее', icon: Building2, color: '#93a4c0', href: '/general' },
       { label: 'Сотрудники', icon: UserSquare, color: '#93a4c0', href: '/staff' },
+      { label: 'Продление', icon: CalendarClock, color: '#f59e0b', href: '/renew' },
     ],
   },
 ];
 
 /**
  * Кликабельны только пункты с `href`. Остальные рендерятся как <div>
- * с `cursor: default` — раздела за ними ещё нет.
+ * с `cursor: default` — раздела за ними ещё нет либо доступ закрыт.
  */
 function NavItem({
   item,
   active,
   collapsed,
+  disabled,
 }: {
   item: Item;
   active: boolean;
   collapsed: boolean;
+  disabled?: boolean;
 }) {
   const Icon = item.icon;
 
@@ -102,7 +108,7 @@ function NavItem({
     ? 'bg-surface-hover font-medium text-white'
     : 'text-text-muted hover:bg-surface hover:text-text';
 
-  if (item.href) {
+  if (item.href && !disabled) {
     return (
       <Link
         href={item.href}
@@ -116,7 +122,10 @@ function NavItem({
   }
 
   return (
-    <div title={collapsed ? item.label : undefined} className={`${base} cursor-default ${state}`}>
+    <div
+      title={disabled ? 'Доступ к панели закончился' : collapsed ? item.label : undefined}
+      className={`${base} cursor-default ${state} ${disabled ? 'opacity-40' : ''}`}
+    >
       {content}
     </div>
   );
@@ -293,7 +302,16 @@ function AccountBlock({ user, collapsed }: { user: SessionUser; collapsed: boole
   );
 }
 
-export default function Sidebar({ project, user }: { project: ProjectState; user: SessionUser }) {
+export default function Sidebar({
+  project,
+  user,
+  expired = false,
+}: {
+  project: ProjectState;
+  user: SessionUser;
+  /** Срок доступа вышел: открыт только раздел «Продление». */
+  expired?: boolean;
+}) {
   const pathname = usePathname();
   const [collapsed, setCollapsed] = useState(false);
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
@@ -306,7 +324,8 @@ export default function Sidebar({ project, user }: { project: ProjectState; user
 
   const trimmed = query.trim();
   // В свёрнутом виде поля нет, поэтому и выдачу показывать негде.
-  const searching = !collapsed && trimmed.length > 0;
+  // С закрытым доступом поиска тоже нет: за игроками он ходит в закрытый API.
+  const searching = !collapsed && !expired && trimmed.length > 0;
 
   // Список игроков нужен только для поиска — тянем его один раз, с первым запросом.
   useEffect(() => {
@@ -367,7 +386,8 @@ export default function Sidebar({ project, user }: { project: ProjectState; user
         </button>
       </div>
 
-      {collapsed ? (
+      {/* С закрытым доступом поиск убран совсем: искать в нём нечего. */}
+      {expired ? null : collapsed ? (
         <button
           type="button"
           onClick={() => setCollapsed(false)}
@@ -414,7 +434,12 @@ export default function Sidebar({ project, user }: { project: ProjectState; user
           />
         ) : (
           <>
-            <NavItem item={START} active={isActive(START.href)} collapsed={collapsed} />
+            <NavItem
+              item={START}
+              active={isActive(START.href)}
+              collapsed={collapsed}
+              disabled={expired}
+            />
 
             {GROUPS.map((group) => {
               const open = openGroups[group.title] !== false;
@@ -444,6 +469,7 @@ export default function Sidebar({ project, user }: { project: ProjectState; user
                           item={item}
                           active={isActive(item.href)}
                           collapsed={collapsed}
+                          disabled={expired && item.href !== '/renew'}
                         />
                       ))}
                     </div>

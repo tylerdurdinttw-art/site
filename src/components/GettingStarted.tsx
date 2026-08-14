@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import { ArrowRight, Check, Loader2, Lock, Package, Plus, Trash2 } from 'lucide-react';
 import { APP_NAME } from '@/lib/brand';
 import { PERMISSIONS } from '@/lib/permissions';
-import type { ProjectState, StaffRow } from '@/lib/projectShared';
+import { membersOnly, type ProjectState, type StaffRow } from '@/lib/projectShared';
 import ConnectServerModal from '@/components/ConnectServerModal';
 
 type StepState = 'done' | 'current' | 'locked';
@@ -290,14 +290,18 @@ export default function GettingStarted({ initial }: { initial: ProjectState }) {
     }
   }, []);
 
+  // Владелец в цепочку не входит: он уже в проекте и права у него полные,
+  // иначе второй и третий шаги считались бы пройденными сразу после регистрации.
+  const members = useMemo(() => membersOnly(project.staff), [project.staff]);
+
   // Шаги считаются по фактическому состоянию проекта, а не по счётчику в базе.
   const done = useMemo(
     () => [
       project.serversCount > 0,
-      project.staff.length > 0,
-      project.staff.some((s) => s.permissions.length > 0),
+      members.length > 0,
+      members.some((s) => s.permissions.length > 0),
     ],
-    [project],
+    [project.serversCount, members],
   );
 
   // Пройденный шаг фиксируем в базе — по нему видно, где пользователь остановился.
@@ -377,7 +381,7 @@ export default function GettingStarted({ initial }: { initial: ProjectState }) {
           title="Пригласите команду"
           description="Пригласите модераторов вашего проекта — они появятся в разделе «Сотрудники» и смогут работать вместе с вами."
         >
-          <InviteTeam staff={project.staff} onChanged={() => void reload()} />
+          <InviteTeam staff={members} onChanged={() => void reload()} />
         </Step>
 
         <Step
@@ -386,7 +390,7 @@ export default function GettingStarted({ initial }: { initial: ProjectState }) {
           title="Выдайте права"
           description="Отметьте, что разрешено каждому модератору: проверки, баны, разбаны, муты и остальное. Права можно менять в любой момент."
         >
-          <GrantPermissions staff={project.staff} onChanged={() => void reload()} />
+          <GrantPermissions staff={members} onChanged={() => void reload()} />
         </Step>
 
         <Step

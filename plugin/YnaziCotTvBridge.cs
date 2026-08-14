@@ -15,7 +15,7 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.2.0")]
+    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.3.0")]
     [Description("Мост между игровым сервером Rust и веб-панелью YnaziCotTV: heartbeat, события, античит-статистика")]
     public class YnaziCotTvBridge : RustPlugin
     {
@@ -2003,13 +2003,17 @@ namespace Oxide.Plugins
 
         private void ExecuteCommand(PanelCommand command)
         {
-            if (command == null || string.IsNullOrEmpty(command.Id) || string.IsNullOrEmpty(command.SteamId))
-                return;
+            if (command == null || string.IsNullOrEmpty(command.Id)) return;
+            // Реплика панели адресована всему серверу, у остальных команд есть игрок.
+            if (command.Type != "say" && string.IsNullOrEmpty(command.SteamId)) return;
 
             var reason = string.IsNullOrEmpty(command.Reason) ? "YnaziCotTV" : command.Reason;
 
             switch (command.Type)
             {
+                case "say":
+                    SayFromPanel(command.Reason);
+                    break;
                 case "kick":
                     rust.RunServerCommand("kick", command.SteamId, reason);
                     break;
@@ -2238,6 +2242,19 @@ namespace Oxide.Plugins
             if (string.IsNullOrEmpty(text)) return;
 
             var line = "<color=#ef4444>[ПРОВЕРКА]</color> " + Sanitize(text);
+            foreach (var player in BasePlayer.activePlayerList)
+            {
+                if (player != null && player.IsConnected) SendReply(player, line);
+            }
+        }
+
+        /// Реплика модератора из панели — всем, кто сейчас на сервере.
+        /// Текст приходит готовой строкой «ник: сообщение», префикс добавляем здесь.
+        private void SayFromPanel(string text)
+        {
+            if (string.IsNullOrEmpty(text)) return;
+
+            var line = "<color=#3b82f6>[ПАНЕЛЬ]</color> " + Sanitize(text);
             foreach (var player in BasePlayer.activePlayerList)
             {
                 if (player != null && player.IsConnected) SendReply(player, line);

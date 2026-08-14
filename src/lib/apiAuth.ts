@@ -1,6 +1,9 @@
 import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
+import { prisma } from '@/lib/prisma';
+import { accessStateOf } from '@/lib/accessShared';
 import type { SessionUser } from '@/lib/authShared';
+import type { PermissionKey } from '@/lib/permissions';
 
 /**
  * Проверка сессии для обработчиков /api.
@@ -36,7 +39,36 @@ export async function requireApiProject(): Promise<ApiContext | NextResponse> {
   if (!user.projectId) {
     return NextResponse.json({ error: 'Проект не выбран.' }, { status: 409 });
   }
+
+  // Оплаченный срок вышел — данные проекта закрыты вместе с его разделами.
+  const project = await prisma.project.findUnique({
+    where: { id: user.projectId },
+    select: { accessExpiresAt: true },
+  });
+  if (!accessStateOf(project?.accessExpiresAt ?? null).active) {
+    return NextResponse.json({ error: 'Доступ к панели закончился.' }, { status: 402 });
+  }
+
   return { user, projectId: user.projectId };
+}
+
+/**
+ * Проверка права сотрудника. Владелец проходит всегда: его права не редактируются
+ * и по смыслу полные. Возвращает готовый 403 либо null, если действие разрешено.
+ */
+export async function requirePermission(
+  ctx: ApiContext,
+  key: PermissionKey,
+): Promise<NextResponse | null> {
+  const staff = await prisma.staff.findFirst({
+    where: { projectId: ctx.projectId, userId: ctx.user.id },
+    select: { role: true, permissions: true },
+  });
+
+  if (!staff) return NextResponse.json({ error: 'Вас нет в списке сотрудников.' }, { status: 403 });
+  if (staff.role === 'owner' || staff.permissions.includes(key)) return null;
+
+  return NextResponse.json({ error: 'Недостаточно прав.' }, { status: 403 });
 }
 
 /** Узкий тип-страж: NextResponse из requireApiProject нужно вернуть, а не разбирать. */
