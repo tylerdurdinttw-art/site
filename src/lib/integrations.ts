@@ -11,8 +11,12 @@ import {
 
 export type { Integrations } from '@/lib/integrationsShared';
 
-/** Discord отвечает быстро; висеть на его таймауте приёму событий незачем. */
-const TIMEOUT_MS = 5000;
+/**
+ * Discord отвечает быстро; висеть на его таймауте приёму событий незачем.
+ * Значение настраивается: с сервера в сети, где до discord.com далеко (или он
+ * проходит через прокси), пяти секунд может не хватать.
+ */
+const TIMEOUT_MS = Number(process.env.DISCORD_TIMEOUT_MS ?? 10000);
 /** Красный кружок репорта — тот же цвет, что у раздела в панели. */
 const REPORT_COLOR = 0xef4444;
 /** Бан — тот же красный; снятие блокировки помечаем зелёным. */
@@ -67,6 +71,30 @@ interface DiscordEmbed {
 }
 
 /**
+ * Почему запрос не дошёл — по-русски и по делу.
+ *
+ * Таймаут и отказ соединения здесь почти всегда значат одно: с сервера панели
+ * не открывается discord.com. Сам вебхук при этом рабочий, и подсказка «проверьте
+ * адрес» уводит не туда — поэтому говорим прямо про доступ наружу.
+ */
+function describeError(err: unknown): string {
+  const name = err instanceof Error ? err.name : '';
+  const code = (err as { cause?: { code?: string } })?.cause?.code ?? '';
+
+  if (name === 'TimeoutError' || code === 'UND_ERR_CONNECT_TIMEOUT' || code === 'ETIMEDOUT') {
+    return `Discord не ответил за ${Math.round(TIMEOUT_MS / 1000)} с. Обычно это значит, что с сервера панели нет доступа к discord.com — блокировка провайдера или фаервол. Вебхук тут ни при чём.`;
+  }
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') {
+    return 'Не удалось разрешить discord.com — на сервере панели не работает DNS.';
+  }
+  if (code === 'ECONNREFUSED' || code === 'ECONNRESET') {
+    return 'Соединение с discord.com сброшено — его режет фаервол или провайдер.';
+  }
+
+  return err instanceof Error ? err.message : 'запрос не ушёл';
+}
+
+/**
  * Отправка в канал Discord. Ошибки не пробрасываются: уведомление — не повод
  * ронять приём события с игрового сервера.
  */
@@ -79,10 +107,20 @@ async function post(webhookUrl: string, embed: DiscordEmbed): Promise<{ ok: bool
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
 
-    if (!res.ok) return { ok: false, error: `Discord ответил ${res.status}` };
-    return { ok: true };
+    if (res.ok) return { ok: true };
+
+    // 401/404 — вебхук удалён или переписан в настройках канала; остальное — на стороне Discord.
+    if (res.status === 401 || res.status === 403 || res.status === 404) {
+      return {
+        ok: false,
+        error: `Discord ответил ${res.status}: такого вебхука уже нет. Создайте его заново в настройках канала и вставьте новый адрес.`,
+      };
+    }
+    if (res.status === 429) return { ok: false, error: 'Discord придержал сообщение: слишком часто (429).' };
+
+    return { ok: false, error: `Discord ответил ${res.status}` };
   } catch (err) {
-    return { ok: false, error: err instanceof Error ? err.message : 'запрос не ушёл' };
+    return { ok: false, error: describeError(err) };
   }
 }
 
