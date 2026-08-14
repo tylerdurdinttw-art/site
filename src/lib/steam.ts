@@ -1,9 +1,11 @@
 import { prisma } from '@/lib/prisma';
+import { getSteamApiKey } from '@/lib/appSettings';
 
 /**
  * Публичные данные из Steam Web API: часы в Rust и блокировки VAC/EAC.
  *
- * Ключ — STEAM_API_KEY (steamcommunity.com/dev/apikey). Без ключа функция ничего не запрашивает
+ * Ключ берётся из раздела «Разработка», а если там пусто — из STEAM_API_KEY
+ * (steamcommunity.com/dev/apikey). Без ключа функция ничего не запрашивает
  * и отдаёт available: false — интерфейс в этом случае показывает прочерки, а не нули.
  * Ответ кешируется в steam_profiles на STEAM_CACHE_TTL_HOURS, чтобы не упереться в лимиты Steam.
  *
@@ -88,6 +90,26 @@ async function getJson<T>(url: string): Promise<T> {
   return (await res.json()) as T;
 }
 
+/**
+ * Проверка ключа для раздела «Разработка»: запрашиваем один публичный профиль.
+ * Steam на неверный ключ отвечает 403, поэтому одного запроса достаточно.
+ */
+export async function checkSteamKey(key: string): Promise<{ ok: boolean; error?: string }> {
+  // Публичный профиль одного из основателей Valve — он есть всегда.
+  const probe = '76561197960435530';
+
+  try {
+    const data = await getJson<SummariesResponse>(
+      `https://api.steampowered.com/ISteamUser/GetPlayerSummaries/v2/?key=${key}&steamids=${probe}`,
+    );
+    if (!data.response?.players?.length) return { ok: false, error: 'Steam ответил пустым списком' };
+    return { ok: true };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'запрос не ушёл';
+    return { ok: false, error: message.includes('403') ? 'Steam отклонил ключ' : message };
+  }
+}
+
 /** Читает из кеша, при промахе — из Steam Web API, и записывает в steam_profiles. */
 export async function getSteamInfo(steamId: string): Promise<SteamInfo> {
   const cached = await prisma.steamProfile.findUnique({ where: { steamId } });
@@ -106,8 +128,8 @@ export async function getSteamInfo(steamId: string): Promise<SteamInfo> {
     };
   }
 
-  const key = process.env.STEAM_API_KEY;
-  if (!key) return UNAVAILABLE('STEAM_API_KEY не задан');
+  const key = await getSteamApiKey();
+  if (!key) return UNAVAILABLE('ключ Steam Web API не задан');
 
   // Пиратский клиент шлёт ID вне диапазона SteamID64 — в Steam такого профиля нет.
   if (!/^7656119\d{10}$/.test(steamId)) return UNAVAILABLE('невалидный SteamID64');

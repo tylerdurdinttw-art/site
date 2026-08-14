@@ -520,7 +520,7 @@ export default function PlayerModal({ steamId, onClose }: Props) {
                     {steam && !steam.available && (
                       <p className="text-[12px] leading-relaxed text-text-muted">
                         Данные Steam недоступны: {steam.error}. Часы и блокировки читаются через
-                        Steam Web API — нужен ключ в{' '}
+                        Steam Web API — нужен ключ: его задают в разделе «Разработка» либо в{' '}
                         <span className="font-mono">STEAM_API_KEY</span>.
                       </p>
                     )}

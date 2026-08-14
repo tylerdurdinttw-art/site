@@ -464,6 +464,16 @@ model ChatKeyword {
   @@map("chat_keywords")
 }
 
+/// Настройки всего сайта вида ключ-значение: их правят разработчики в разделе
+/// «Разработка». В отличие от panel_settings проекта тут нет — строка одна на всех.
+model AppSetting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+
+  @@map("app_settings")
+}
+
 /// Настройки панели вида ключ-значение (цвет пометки чата и т.п.).
 model PanelSetting {
   projectId String  @default("default")

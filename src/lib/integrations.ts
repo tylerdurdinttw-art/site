@@ -4,6 +4,8 @@ import {
   DEFAULT_INTEGRATIONS,
   INTEGRATIONS_KEY,
   normalizeIntegrations,
+  type DiscordChannel,
+  type DiscordChannelKey,
   type Integrations,
 } from '@/lib/integrationsShared';
 
@@ -13,6 +15,9 @@ export type { Integrations } from '@/lib/integrationsShared';
 const TIMEOUT_MS = 5000;
 /** Красный кружок репорта — тот же цвет, что у раздела в панели. */
 const REPORT_COLOR = 0xef4444;
+/** Бан — тот же красный; снятие блокировки помечаем зелёным. */
+const BAN_COLOR = 0xef4444;
+const UNBAN_COLOR = 0x22c55e;
 
 export async function getIntegrations(projectId: string): Promise<Integrations> {
   const row = await prisma.panelSetting.findUnique({
@@ -29,10 +34,17 @@ export async function getIntegrations(projectId: string): Promise<Integrations> 
 
 export async function saveIntegrations(projectId: string, patch: unknown): Promise<Integrations> {
   const current = await getIntegrations(projectId);
-  const input = (patch ?? {}) as Partial<Record<keyof Integrations, unknown>>;
+  const input = (patch ?? {}) as { discord?: Partial<Record<DiscordChannelKey, unknown>> };
+  const discord = input.discord ?? {};
+
+  // Браузер шлёт только тот канал, который менял, — остальное берём из текущих.
+  const merge = (key: DiscordChannelKey): DiscordChannel => ({
+    ...current.discord[key],
+    ...((discord[key] as object) ?? {}),
+  });
 
   const next = normalizeIntegrations({
-    discord: { ...current.discord, ...((input.discord as object) ?? {}) },
+    discord: { reports: merge('reports'), bans: merge('bans') },
   });
 
   const value = JSON.stringify(next);
@@ -74,6 +86,23 @@ async function post(webhookUrl: string, embed: DiscordEmbed): Promise<{ ok: bool
   }
 }
 
+/**
+ * Отправка в канал проекта. Молча выходит, если вебхук не привязан или канал
+ * выключен: это нормальное состояние настроек, а не ошибка.
+ */
+async function notify(
+  projectId: string,
+  channel: DiscordChannelKey,
+  embed: DiscordEmbed,
+): Promise<void> {
+  const { discord } = await getIntegrations(projectId);
+  const target = discord[channel];
+  if (!target.webhookUrl || !target.enabled) return;
+
+  const sent = await post(target.webhookUrl, embed);
+  if (!sent.ok) console.error(`Discord (${channel}): сообщение не доставлено — ${sent.error}`);
+}
+
 export interface ReportNotice {
   targetName: string;
   targetSteamId: string;
@@ -83,11 +112,8 @@ export interface ReportNotice {
   serverName: string;
 }
 
-/** Уведомление о новом репорте. Молча выходит, если вебхук не привязан. */
+/** Уведомление о новом репорте. */
 export async function notifyReport(projectId: string, report: ReportNotice): Promise<void> {
-  const { discord } = await getIntegrations(projectId);
-  if (!discord.webhookUrl || !discord.reports) return;
-
   const fields = [
     { name: 'На кого', value: `${report.targetName}\n\`${report.targetSteamId}\``, inline: true },
     { name: 'От кого', value: report.reporterName, inline: true },
@@ -97,23 +123,71 @@ export async function notifyReport(projectId: string, report: ReportNotice): Pro
   if (report.subject) fields.push({ name: 'Причина', value: report.subject.slice(0, 1024), inline: false });
   if (report.message) fields.push({ name: 'Комментарий', value: report.message.slice(0, 1024), inline: false });
 
-  const sent = await post(discord.webhookUrl, {
+  await notify(projectId, 'reports', {
     title: 'Новый репорт',
     color: REPORT_COLOR,
     fields,
     footer: { text: APP_NAME },
     timestamp: new Date().toISOString(),
   });
+}
 
-  if (!sent.ok) console.error(`Discord: репорт не доставлен — ${sent.error}`);
+export interface BanNotice {
+  name: string;
+  steamId: string;
+  reason: string | null;
+  /** Кто выдал бан; null — бан пришёл из игры и автора там не узнать. */
+  admin: string | null;
+  serverName: string;
+}
+
+/** Уведомление о новой блокировке — первая половина бан-листа. */
+export async function notifyBan(projectId: string, ban: BanNotice): Promise<void> {
+  const fields = [
+    { name: 'Игрок', value: `${ban.name}\n\`${ban.steamId}\``, inline: true },
+    { name: 'Сервер', value: ban.serverName, inline: true },
+    { name: 'Выдал', value: ban.admin ?? 'из игры', inline: true },
+  ];
+
+  if (ban.reason) fields.push({ name: 'Причина', value: ban.reason.slice(0, 1024), inline: false });
+
+  await notify(projectId, 'bans', {
+    title: 'Новая блокировка',
+    color: BAN_COLOR,
+    fields,
+    footer: { text: APP_NAME },
+    timestamp: new Date().toISOString(),
+  });
+}
+
+/** Снятие блокировки — вторая половина бан-листа, тот же канал. */
+export async function notifyUnban(
+  projectId: string,
+  unban: { name: string; steamId: string; serverName: string },
+): Promise<void> {
+  await notify(projectId, 'bans', {
+    title: 'Блокировка снята',
+    color: UNBAN_COLOR,
+    fields: [
+      { name: 'Игрок', value: `${unban.name}\n\`${unban.steamId}\``, inline: true },
+      { name: 'Сервер', value: unban.serverName, inline: true },
+    ],
+    footer: { text: APP_NAME },
+    timestamp: new Date().toISOString(),
+  });
 }
 
 /** Проверочное сообщение по кнопке «Отправить тест» в разделе «Интеграции». */
-export async function notifyTest(webhookUrl: string): Promise<{ ok: boolean; error?: string }> {
+export async function notifyTest(
+  webhookUrl: string,
+  channel: DiscordChannelKey,
+): Promise<{ ok: boolean; error?: string }> {
+  const what = channel === 'bans' ? 'блокировки игроков' : 'репорты игроков';
+
   return post(webhookUrl, {
     title: 'Проверка связи',
-    description: `Вебхук привязан. Сюда будут приходить репорты игроков из ${APP_NAME}.`,
-    color: REPORT_COLOR,
+    description: `Вебхук привязан. Сюда будут приходить ${what} из ${APP_NAME}.`,
+    color: channel === 'bans' ? BAN_COLOR : REPORT_COLOR,
     footer: { text: APP_NAME },
     timestamp: new Date().toISOString(),
   });

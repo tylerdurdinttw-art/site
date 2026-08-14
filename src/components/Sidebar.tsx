@@ -8,6 +8,7 @@ import {
   Building2,
   CalendarClock,
   ChevronDown,
+  Code2,
   HardDrive,
   LogOut,
   Map,
@@ -26,6 +27,7 @@ import {
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/authShared';
 import type { ProjectState } from '@/lib/projectShared';
+import { isDeveloper } from '@/lib/devShared';
 
 interface Item {
   label: string;
@@ -72,6 +74,20 @@ const GROUPS: Group[] = [
     ],
   },
 ];
+
+/**
+ * Служебный раздел разработчиков сайта. В общий список не входит: его дописывает
+ * groupsFor() тем логинам, что есть в DEVELOPER_LOGINS. Само по себе меню ничего
+ * не открывает — страница и её эндпоинты проверяют логин заново.
+ */
+const DEV_ITEM: Item = { label: 'Разработка', icon: Code2, color: '#f472b6', href: '/dev' };
+
+function groupsFor(dev: boolean): Group[] {
+  if (!dev) return GROUPS;
+  return GROUPS.map((group) =>
+    group.title === 'Проект' ? { ...group, items: [...group.items, DEV_ITEM] } : group,
+  );
+}
 
 /**
  * Кликабельны только пункты с `href`. Остальные рендерятся как <div>
@@ -139,14 +155,16 @@ interface SearchPlayer {
 }
 
 /** Разделы, по которым ищет поле в сайдбаре — только те, у которых есть страница. */
-const SEARCHABLE: { label: string; href: string; icon: LucideIcon }[] = [
-  { label: START.label, href: START.href!, icon: START.icon },
-  ...GROUPS.flatMap((group) =>
-    group.items
-      .filter((item): item is Item & { href: string } => Boolean(item.href))
-      .map((item) => ({ label: item.label, href: item.href, icon: item.icon })),
-  ),
-];
+function searchableFor(groups: Group[]): { label: string; href: string; icon: LucideIcon }[] {
+  return [
+    { label: START.label, href: START.href!, icon: START.icon },
+    ...groups.flatMap((group) =>
+      group.items
+        .filter((item): item is Item & { href: string } => Boolean(item.href))
+        .map((item) => ({ label: item.label, href: item.href, icon: item.icon })),
+    ),
+  ];
+}
 
 function SearchResults({
   sections,
@@ -322,6 +340,14 @@ export default function Sidebar({
 
   const isActive = (href?: string) => Boolean(href && pathname === href);
 
+  // Разработчику дописывается «Разработка», и она остаётся живой даже с закрытым
+  // доступом: срок продлевают как раз из неё.
+  const dev = isDeveloper(user.login);
+  const groups = useMemo(() => groupsFor(dev), [dev]);
+  const searchable = useMemo(() => searchableFor(groups), [groups]);
+  const isLocked = (href?: string) =>
+    expired && href !== '/renew' && !(dev && href === DEV_ITEM.href);
+
   const trimmed = query.trim();
   // В свёрнутом виде поля нет, поэтому и выдачу показывать негде.
   // С закрытым доступом поиска тоже нет: за игроками он ходит в закрытый API.
@@ -351,8 +377,8 @@ export default function Sidebar({
 
   const foundSections = useMemo(() => {
     if (!searching) return [];
-    return SEARCHABLE.filter((item) => item.label.toLowerCase().includes(needle));
-  }, [searching, needle]);
+    return searchable.filter((item) => item.label.toLowerCase().includes(needle));
+  }, [searching, searchable, needle]);
 
   const foundPlayers = useMemo(() => {
     if (!searching || !players) return [];
@@ -441,7 +467,7 @@ export default function Sidebar({
               disabled={expired}
             />
 
-            {GROUPS.map((group) => {
+            {groups.map((group) => {
               const open = openGroups[group.title] !== false;
               return (
                 <div key={group.title}>
@@ -469,7 +495,7 @@ export default function Sidebar({
                           item={item}
                           active={isActive(item.href)}
                           collapsed={collapsed}
-                          disabled={expired && item.href !== '/renew'}
+                          disabled={isLocked(item.href)}
                         />
                       ))}
                     </div>

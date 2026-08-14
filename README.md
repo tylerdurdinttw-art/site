@@ -10,7 +10,7 @@ site/
 ├── prisma/
 │   ├── schema.prisma                 User, Session, EmailToken, Project, Staff, Server, Player,
 │   │                                 PlayerSession, PlayerEvent, Report, Violation, IpInfo,
-│   │                                 SteamProfile, Ban, ServerCommand
+│   │                                 SteamProfile, Ban, ServerCommand, AppSetting
 │   └── seed.ts                       10 моковых игроков + 2 сервера
 ├── plugin/
 │   └── YnaziCotTvBridge.cs          Oxide-плагин, кладётся в oxide/plugins
@@ -34,12 +34,18 @@ site/
 │   │   ├── (panel)/reports/page.tsx  игроки, на которых жаловались
 │   │   ├── (panel)/settings/page.tsx настройки модерации: репорты, проверки, баны
 │   │   ├── (panel)/general/page.tsx  название, ссылка, логотип и ID проекта
+│   │   ├── (panel)/integrations/page.tsx вебхуки Discord: бан-лист и репорты
+│   │   ├── (panel)/dev/page.tsx      «Разработка»: ключ Steam и доступ по нику (только DEVELOPER_LOGINS)
 │   │   ├── (panel)/chat/page.tsx     чат и фильтры ключевых слов
 │   │   ├── (panel)/map/page.tsx      карта сервера
 │   │   └── api/
 │   │       ├── project/route.ts          GET/POST/PATCH /api/project (создание, онбординг, имя и ссылка)
 │   │       ├── project/logo/route.ts     GET/POST /api/project/logo (показать и заменить)
 │   │       ├── settings/route.ts         GET/PATCH /api/settings   (настройки модерации)
+│   │       ├── integrations/route.ts     GET/PATCH /api/integrations (вебхуки Discord)
+│   │       ├── integrations/test/route.ts POST /api/integrations/test (проверочное сообщение)
+│   │       ├── dev/steam/route.ts        GET/PUT/POST /api/dev/steam  (ключ Steam Web API)
+│   │       ├── dev/access/route.ts       GET/POST /api/dev/access     (сроки доступа по нику)
 │   │       ├── reports/route.ts          GET/DELETE /api/reports   (список и полная очистка)
 │   │       ├── staff/route.ts            GET/POST /api/staff
 │   │       ├── staff/[id]/route.ts       PATCH/DELETE /api/staff/{id} (права, удаление)
@@ -100,6 +106,8 @@ site/
 │   │   ├── SettingsControls.tsx      разметка страниц-настроек: строки, тумблеры, чипсы
 │   │   ├── SettingsView.tsx          «Настройки»: три вкладки, сохранение на лету
 │   │   ├── GeneralView.tsx           «Общее»: название, ссылка, логотип и ID проекта
+│   │   ├── IntegrationsView.tsx      «Интеграции»: два вебхука Discord и тест связи
+│   │   ├── DevView.tsx               «Разработка»: ключ Steam, продление по нику, список проектов
 │   │   ├── PlayerModal.tsx           карточка игрока: 5 вкладок, действия в меню
 │   │   ├── Avatar.tsx                аватар из Steam с точкой статуса
 │   │   ├── BanFilters.tsx            поиск по нику/SteamID/причине, сервер, статус
@@ -134,6 +142,11 @@ site/
 │       ├── brand.ts                  название панели и её домен
 │       ├── ipLookup.ts               соседи по IP, провайдер, город и страна
 │       ├── settings.ts               настройки модерации в panel_settings
+│       ├── integrations.ts           вебхуки Discord: чтение, запись и отправка уведомлений
+│       ├── integrationsShared.ts     каналы, умолчания и проверка адреса вебхука без Prisma
+│       ├── appSettings.ts            глобальные настройки сайта в app_settings (ключ Steam)
+│       ├── devAccess.ts              выдача и закрытие доступа по нику владельца
+│       ├── devShared.ts              список разработчиков сайта и типы раздела «Разработка»
 │       ├── settingsShared.ts         типы, умолчания и нормализация настроек без Prisma
 │       ├── reports.ts                игроки с жалобами, очистка репортов
 │       ├── reportsShared.ts          строка раздела «Репорты» без Prisma
@@ -282,7 +295,7 @@ npm run dev
 | `IP_LOOKUP_FALLBACK` | нет | `off` запрещает ходить в ip-api.com, когда локальных баз нет; по умолчанию `on` |
 | `IP_INFO_TTL_DAYS` | нет | срок жизни кеша `ip_info`, по умолчанию 30 |
 | `VPN_ASN_KEYWORDS` | нет | дополнительные подстроки для признака VPN, через запятую |
-| `STEAM_API_KEY` | нет | ключ Steam Web API; **без него VAC/EAC и часы неизвестны** — карточка так и пишет, значков блокировок не будет |
+| `STEAM_API_KEY` | нет | ключ Steam Web API; **без него VAC/EAC и часы неизвестны** — карточка так и пишет, значков блокировок не будет. Ключ, заданный в разделе «Разработка», перекрывает эту переменную |
 | `STEAM_CACHE_TTL_HOURS` | нет | срок жизни кеша `steam_profiles`, по умолчанию 12 |
 | `INGEST_MAX_SKEW_SEC` | нет | допустимый возраст запроса по `X-Timestamp`, по умолчанию 60 |
 | `INGEST_RATE_LIMIT_PER_MIN` | нет | лимит ingest-запросов на сервер, по умолчанию 60 |
@@ -601,6 +614,47 @@ MaxMind тем же `lookupIp`, что и при ingest, — наружу пан
 Номер проекта считается из даты создания (`projectPublicId`), поэтому переименование
 и смена ссылки его не меняют. Отдельного поля в базе под него нет.
 
+## Раздел «Интеграции»
+
+`/integrations` — вебхуки Discord. Каналов два, и вебхук у каждого свой: их обычно разводят
+по разным каналам сервера.
+
+| Канал | Что уходит | Откуда шлётся |
+|---|---|---|
+| Бан-лист | новая блокировка и снятие блокировки | ingest события `player_banned` и `player_unbanned` |
+| Репорты | каждая жалоба игрока | ingest событие `player_reported` |
+
+Настройки лежат одной строкой JSON в `panel_settings` под ключом `integrations`
+(`{ discord: { bans: { webhookUrl, enabled }, reports: { … } } }`) и правятся через
+`GET`/`PATCH /api/integrations`; кнопка «Отправить тест» — `POST /api/integrations/test`
+с полем `channel`. Старая запись с одним вебхуком на всё (`{ webhookUrl, reports: true }`)
+читается по-прежнему: адрес из неё переносится в канал «Репорты».
+
+Адрес проверяется регулярным выражением по домену Discord и на сервере, и в браузере:
+поле, куда можно вписать произвольный хост, — это готовый инструмент для запросов
+с нашего сервера куда угодно. Пустая строка — осознанная отвязка. Ошибки доставки
+только пишутся в лог: недоступный канал не должен ломать приём события с игрового сервера.
+
+## Раздел «Разработка»
+
+`/dev` — служебный раздел разработчиков сайта. В сайдбаре он дописывается в группу «Проект»,
+но только тем логинам, что перечислены в `DEVELOPER_LOGINS` (`src/lib/devShared.ts`);
+всем остальным и страница, и её эндпоинты отвечают 404. Списка нет в базе намеренно:
+иначе владелец проекта смог бы выписать доступ себе через свою же панель. Права сотрудников
+здесь ни при чём, и срок доступа проекта тоже не проверяется — раздел открыт даже тогда,
+когда он вышел, иначе продлить его самому себе было бы неоткуда.
+
+| Что можно | Как это работает |
+|---|---|
+| Вставить ключ Steam Web API | `GET`/`PUT`/`POST /api/dev/steam`; значение ложится в `app_settings` под ключом `steam_api_key` и перекрывает `STEAM_API_KEY`. Кнопка «Проверить» дёргает Steam по публичному профилю |
+| Продлить доступ по нику | `POST /api/dev/access` — то же, что `npm run access -- grant`: месяцы прибавляются к остатку. Ник — логин или почта; продлевается проект, где человек владелец |
+| Закрыть доступ | тот же эндпоинт с `action: "revoke"` — панель проекта начнёт показывать «Продление» |
+| Посмотреть все проекты | `GET /api/dev/access`: владелец, число серверов и срок по каждому проекту |
+
+Сам ключ Steam наружу не отдаётся никогда — только признак «задан» и последние четыре
+символа. Ключ из `app_settings` читается с коротким кешем в памяти процесса (10 секунд),
+чтобы правка вступала в силу сразу, но каждый запрос к Steam не ходил в базу за строкой.
+
 ## Вызов на проверку
 
 Кнопка «Проверка» в шапке карточки делает `POST /api/players/{steamId}/check`. Панель заводит
@@ -793,6 +847,8 @@ MaxMind тем же `lookupIp`, что и при ingest, — наружу пан
 | `npm run db:migrate` | миграция для разработки |
 | `npm run db:seed` | сид: 2 сервера и 10 игроков |
 | `npm run db:studio` | Prisma Studio |
+| `npm run access -- list\|grant\|revoke` | сроки доступа проектов; то же самое умеет раздел «Разработка» |
+| `npm run user:password` | сменить пароль учётке |
 
 Дев-сервер и прод-сборка лежат в разных папках: `next dev` пишет в `.next-dev`, `next build`
 и `next start` — в `.next` (`distDir` в `next.config.mjs` выбирается по `NODE_ENV`). Иначе

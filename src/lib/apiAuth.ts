@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getCurrentUser } from '@/lib/auth';
 import { prisma } from '@/lib/prisma';
 import { accessStateOf } from '@/lib/accessShared';
+import { isDeveloper } from '@/lib/devShared';
 import type { SessionUser } from '@/lib/authShared';
 import type { PermissionKey } from '@/lib/permissions';
 
@@ -71,7 +72,22 @@ export async function requirePermission(
   return NextResponse.json({ error: 'Недостаточно прав.' }, { status: 403 });
 }
 
+/**
+ * Проверка для эндпоинтов раздела «Разработка». Права проекта тут ни при чём:
+ * доступ определяется только логином из списка разработчиков сайта. Срок доступа
+ * проекта здесь намеренно не смотрим — продлевать его нужно в том числе тогда,
+ * когда он уже вышел.
+ *
+ * Отказ отдаётся как 404: посторонним незачем знать, что раздел вообще есть.
+ */
+export async function requireDeveloper(): Promise<SessionUser | NextResponse> {
+  const user = await getCurrentUser();
+  if (!user) return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
+  if (!isDeveloper(user.login)) return NextResponse.json({ error: 'not found' }, { status: 404 });
+  return user;
+}
+
 /** Узкий тип-страж: NextResponse из requireApiProject нужно вернуть, а не разбирать. */
-export function isDenied(value: ApiContext | NextResponse): value is NextResponse {
+export function isDenied<T>(value: T | NextResponse): value is NextResponse {
   return value instanceof NextResponse;
 }
