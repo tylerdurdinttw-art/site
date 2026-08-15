@@ -42,7 +42,11 @@ namespace Oxide.Plugins
             [JsonProperty("CooldownSec")] public int CooldownSec { get; set; } = 600;
             /// Аватарки в меню рисует сам клиент по SteamID. Выключите, если они мешают.
             [JsonProperty("LoadAvatars")] public bool LoadAvatars { get; set; } = true;
-            [JsonProperty("Reasons")] public List<string> Reasons { get; set; } = new List<string>
+            /// Replace обязателен: по умолчанию Newtonsoft не создаёт список заново, а дописывает
+            /// в уже существующий — тот, что задан здесь инициализатором. Без него причины из файла
+            /// прибавлялись бы к пяти стандартным на каждой загрузке, и конфиг рос бы с каждым reload.
+            [JsonProperty("Reasons", ObjectCreationHandling = ObjectCreationHandling.Replace)]
+            public List<string> Reasons { get; set; } = new List<string>
             {
                 "Cheating", "Insults", "Spam", "Bug abuse", "Other"
             };
@@ -100,6 +104,12 @@ namespace Oxide.Plugins
                 if (_config.Reports == null) _config.Reports = new ReportsConfig();
                 if (_config.Reports.Reasons == null || _config.Reports.Reasons.Count == 0)
                     _config.Reports.Reasons = new ReportsConfig().Reasons;
+                else
+                    // Конфиги, распухшие до починки Replace, чистим один раз при загрузке.
+                    _config.Reports.Reasons = _config.Reports.Reasons
+                        .Where(reason => !string.IsNullOrEmpty(reason))
+                        .Distinct()
+                        .ToList();
                 // Секция появилась в 1.4.0 — у старых конфигов её нет, дописываем пустую.
                 if (_config.Discord == null) _config.Discord = new DiscordConfig();
             }
@@ -2527,6 +2537,68 @@ namespace Oxide.Plugins
             arg.ReplyWith(StatusText());
         }
 
+        /// Проверка вебхуков: показывает, что реально лежит в конфиге у работающего
+        /// плагина, и шлёт тестовое сообщение. Без неё «репорт не дошёл» неотличимо
+        /// от «вебхук пуст»: пустой адрес отправка пропускает молча.
+        [ConsoleCommand("ynazicottv.discordtest")]
+        private void CmdConsoleDiscordTest(ConsoleSystem.Arg arg)
+        {
+            if (arg.Connection != null && arg.Connection.authLevel < 2)
+            {
+                arg.ReplyWith("Нет доступа.");
+                return;
+            }
+
+            var discord = _config.Discord;
+            var bans = (arg.GetString(0) ?? "reports").ToLowerInvariant() == "bans";
+            var url = bans ? discord.BansWebhook : discord.ReportsWebhook;
+            var enabled = bans ? discord.NotifyBans : discord.NotifyReports;
+
+            arg.ReplyWith(
+                "Discord у загруженного плагина:\n" +
+                "  BansWebhook: " + DescribeWebhook(discord.BansWebhook) + "\n" +
+                "  ReportsWebhook: " + DescribeWebhook(discord.ReportsWebhook) + "\n" +
+                "  NotifyBans: " + discord.NotifyBans +
+                ", NotifyUnbans: " + discord.NotifyUnbans +
+                ", NotifyReports: " + discord.NotifyReports + "\n" +
+                "  ServerName: " + DiscordServerName());
+
+            if (string.IsNullOrEmpty(url))
+            {
+                arg.ReplyWith("Адрес пуст — слать некуда. Впишите его в конфиг и перезагрузите плагин: "
+                              + "oxide.reload YnaziCotTvBridge");
+                return;
+            }
+
+            if (!enabled)
+                arg.ReplyWith("Внимание: выключатель Notify" + (bans ? "Bans" : "Reports")
+                              + " стоит в false — настоящие события уходить не будут, тест отправляю всё равно.");
+
+            arg.ReplyWith("Отправляю тестовое сообщение...");
+
+            PostToDiscord(url, "Проверка вебхука", bans ? ColorBan : ColorReport, new List<object>
+            {
+                DiscordField("Канал", bans ? "Баны" : "Репорты", true),
+                DiscordField("Сервер", DiscordServerName(), true)
+            }, (code, response) =>
+            {
+                if (code >= 200 && code < 300) Puts("Discord: тестовое сообщение доставлено (код " + code + ").");
+                // Про неудачу PostToDiscord уже написал сам — второй раз не повторяем.
+            });
+        }
+
+        /// Что видно про адрес, не показывая токен вебхука целиком.
+        private static string DescribeWebhook(string url)
+        {
+            if (string.IsNullOrEmpty(url)) return "пусто (сообщения не отправляются)";
+
+            if (!url.StartsWith("https://", StringComparison.OrdinalIgnoreCase)
+                || url.IndexOf("/api/webhooks/", StringComparison.OrdinalIgnoreCase) < 0)
+                return "не похож на вебхук: " + Trim(url, 60);
+
+            return "задан, " + url.Length + " символов: " + Trim(url, 45);
+        }
+
         /// Ответ может быть HTML-страницей на сотни килобайт — в консоль столько не нужно.
         private static string Shorten(string value)
         {
@@ -2791,7 +2863,8 @@ namespace Oxide.Plugins
             {
                 ["name"] = name,
                 // У Discord жёсткий предел на поле — режем, иначе он отвергнет всё сообщение.
-                ["value"] = Trim(value ?? "—", 1024),
+                // Пустое значение он отвергает так же, как слишком длинное, поэтому нужен прочерк.
+                ["value"] = Trim(string.IsNullOrEmpty(value) ? "—" : value, 1024),
                 ["inline"] = inline
             };
         }
@@ -2822,7 +2895,8 @@ namespace Oxide.Plugins
         /// Очередь панели тут не годится: у неё свой хост, подпись HMAC ключами сервера
         /// и ретраи, а Discord ничего этого не понимает. Недоставленное сообщение просто
         /// теряется с предупреждением в консоли: уведомление не повод копить очередь.
-        private void PostToDiscord(string webhookUrl, string title, int color, List<object> fields)
+        private void PostToDiscord(string webhookUrl, string title, int color, List<object> fields,
+            Action<int, string> onDone = null)
         {
             if (string.IsNullOrEmpty(webhookUrl)) return;
 
@@ -2853,6 +2927,10 @@ namespace Oxide.Plugins
 
             webrequest.Enqueue(webhookUrl, body, (code, response) =>
             {
+                // Проверка вебхука ждёт ответа в любом случае — даже успешного, о котором
+                // обычная отправка молчит.
+                if (onDone != null) onDone(code, response);
+
                 // Вебхук отвечает 204 без тела; всё остальное стоит показать администратору.
                 if (code >= 200 && code < 300) return;
 
