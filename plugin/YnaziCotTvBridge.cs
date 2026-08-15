@@ -15,7 +15,7 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.4.0")]
+    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.4.1")]
     [Description("Мост между игровым сервером Rust и веб-панелью YnaziCotTV: heartbeat, события, античит-статистика")]
     public class YnaziCotTvBridge : RustPlugin
     {
@@ -570,6 +570,20 @@ namespace Oxide.Plugins
             if (reporter == null) return;
 
             SendReportEvent(reporter, targetId, targetName, subject, message, type);
+        }
+
+        /// Точка входа для сторонних плагинов: чужое меню репортов должно вести туда же,
+        /// куда ведут F7 и /report. Прямой вызов SendEvent("player_reported") в обход
+        /// этого метода кладёт жалобу только в панель — в Discord не уходит ничего,
+        /// и молча: вся диагностика вебхука живёт дальше по пути.
+        [HookMethod("SendPlayerReport")]
+        public bool SendPlayerReport(BasePlayer reporter, string targetId, string targetName,
+            string subject, string message, string type)
+        {
+            if (reporter == null) return false;
+
+            SendReportEvent(reporter, targetId, targetName, subject, message, type);
+            return true;
         }
 
         /// Репорт уходит двумя путями сразу: в панель (там он ложится в таблицу)
