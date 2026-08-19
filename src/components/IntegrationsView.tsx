@@ -24,6 +24,7 @@ const SNIPPET = `"Discord": {
   "NotifyUnbans": true,
   "NotifyReports": true,
   "ServerName": "",
+  "PanelUrl": "https://quickrust.online",
   "MentionEveryoneFrom": 2,
   "ReportCountWindowHours": 24,
   "ShowAvatars": true
@@ -134,7 +135,7 @@ export default function IntegrationsView() {
                 ['BansWebhook', 'Снятие блокировки: кто снял и с кого'],
                 [
                   'ReportsWebhook',
-                  'Жалоба игрока: на кого (со ссылкой на профиль и аватаркой), какая она по счёту, '
+                  'Жалоба игрока: на кого (ник ведёт в его карточку в панели), какая она по счёту, '
                     + 'причина, комментарий и от кого',
                 ],
               ].map(([key, what], i) => (

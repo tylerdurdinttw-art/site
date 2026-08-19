@@ -11,7 +11,7 @@ const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/gif'];
 
 /**
  * Экран создания проекта. Ссылка подставляется из названия, пока её не тронули руками:
- * так «Null Rust» сразу превращается в quickpanel.com/nullrust.
+ * так «Null Rust» сразу превращается в quickrust.online/nullrust.
  */
 export default function CreateProjectForm({ onBack }: { onBack?: () => void } = {}) {
   const router = useRouter();

@@ -74,6 +74,9 @@ namespace Oxide.Plugins
             /// этого срока счёт идёт заново — иначе одна старая жалоба вечно тянула бы
             /// за собой @everyone.
             [JsonProperty("ReportCountWindowHours")] public int ReportCountWindowHours { get; set; } = 24;
+            /// Адрес панели для ссылок в сообщениях — тот, по которому её открывает
+            /// модератор в браузере. Пусто — берётся ApiUrl, если он не локальный.
+            [JsonProperty("PanelUrl")] public string PanelUrl { get; set; } = "";
             /// Аватарки Steam в сообщении: справа — тот, на кого жалуются, в подписи — жалобщик.
             /// Берутся из публичного XML профиля, ключ Steam API для этого не нужен.
             [JsonProperty("ShowAvatars")] public bool ShowAvatars { get; set; } = true;
@@ -624,14 +627,19 @@ namespace Oxide.Plugins
             var count = BumpReportTally(targetId);
             var shownName = string.IsNullOrEmpty(targetName) ? (targetId ?? "—") : targetName;
 
-            // На кого жалуются — ссылкой на профиль Steam; без валидного ID ссылки нет.
-            var target = IsSteamId(targetId)
-                ? "[" + EscapeMarkdown(Trim(shownName, 64)) + "](https://steamcommunity.com/profiles/" + targetId + ")"
-                : "**" + EscapeMarkdown(Trim(shownName, 64)) + "**";
+            // Ник ведёт в карточку игрока в панели: оттуда его сразу вызывают на проверку.
+            // Не знаем публичного адреса панели — остаётся профиль Steam.
+            var profile = PanelPlayerUrl(targetId) ?? SteamProfileUrl(targetId);
+            var target = profile == null
+                ? "**" + EscapeMarkdown(Trim(shownName, 64)) + "**"
+                : "[" + EscapeMarkdown(Trim(shownName, 64)) + "](" + profile + ")";
 
             var fields = new List<object>
             {
-                DiscordField("SteamID", targetId, true),
+                // Ник уводит в панель, поэтому профиль Steam прячется под сам SteamID.
+                DiscordField("SteamID", IsSteamId(targetId)
+                    ? "[" + targetId + "](" + SteamProfileUrl(targetId) + ")"
+                    : targetId, true),
                 DiscordField("Причина", string.IsNullOrEmpty(subject) ? type : subject, true)
             };
 
@@ -3051,6 +3059,36 @@ namespace Oxide.Plugins
             tally.Count++;
             tally.LastAt = now;
             return tally.Count;
+        }
+
+        private static string SteamProfileUrl(string steamId)
+        {
+            return IsSteamId(steamId) ? "https://steamcommunity.com/profiles/" + steamId : null;
+        }
+
+        /// Карточка игрока в панели — та же ссылка, что у поиска в сайдбаре. Адрес берём
+        /// из PanelUrl, иначе из ApiUrl: у большинства это один и тот же публичный домен.
+        /// Локальный адрес не годится — по ссылке на localhost из Discord никто не перейдёт.
+        private string PanelPlayerUrl(string steamId)
+        {
+            if (!IsSteamId(steamId)) return null;
+
+            var address = _config.Discord.PanelUrl;
+            if (string.IsNullOrEmpty(address)) address = _config.ApiUrl;
+            if (string.IsNullOrEmpty(address)) return null;
+
+            address = address.Trim().TrimEnd('/');
+            if (address.Length == 0) return null;
+
+            if (address.IndexOf("localhost", StringComparison.OrdinalIgnoreCase) >= 0
+                || address.IndexOf("127.0.0.1", StringComparison.Ordinal) >= 0) return null;
+
+            // Домен без схемы Discord ссылкой не считает.
+            if (!address.StartsWith("http://", StringComparison.OrdinalIgnoreCase)
+                && !address.StartsWith("https://", StringComparison.OrdinalIgnoreCase))
+                address = "https://" + address;
+
+            return address + "/players?player=" + steamId;
         }
 
         /// Ник игрока Discord читает как разметку: звёздочки, подчёркивания и скобки

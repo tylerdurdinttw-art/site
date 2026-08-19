@@ -56,8 +56,8 @@ export default function ServerTile({ server, onReconnect, onDeleted }: Props) {
   };
 
   return (
-    <div className="overflow-hidden rounded-card border border-border bg-surface">
-      <div className="relative h-[104px] bg-surface-hover">
+    <div className="rounded-card border border-border bg-surface">
+      <div className="relative h-[104px] overflow-hidden rounded-t-card bg-surface-hover">
         {hasBanner ? (
           // Карта лежит в кеше панели и отдаётся своим эндпоинтом — оптимизатор next/image не нужен.
           // eslint-disable-next-line @next/next/no-img-element
