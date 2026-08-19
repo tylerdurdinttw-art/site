@@ -76,10 +76,12 @@ export async function POST(req: Request, { params }: { params: { id: string } })
     );
   }
 
+  // Логин уходит вместе с командой: в Discord блокировку подписывает тот, кто закрыл
+  // проверку, а плагин сам этого знать не может.
   if (outcome === 'ban') {
-    await queueCommand(projectId, check.serverId, 'ban', check.steamId, reason);
+    await queueCommand(projectId, check.serverId, 'ban', check.steamId, reason, ctx.user.login);
   } else if (outcome === 'team_ban') {
-    await queueCommand(projectId, check.serverId, 'ban_team', check.steamId, reason);
+    await queueCommand(projectId, check.serverId, 'ban_team', check.steamId, reason, ctx.user.login);
   }
 
   // Снимает баннер с экрана и выводит игрока из списка «под проверкой» в плагине.

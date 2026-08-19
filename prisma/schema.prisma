@@ -560,6 +560,9 @@ model ServerCommand {
   steamId String
   /// Для kick/ban — причина, для check/check_banner/check_pm — текст для игрока.
   reason  String @default("")
+  /// Кто поставил команду: логин сотрудника панели. Плагин подписывает им сообщение
+  /// в Discord — «выдал блокировку». null — команду поставил не человек.
+  admin   String?
 
   status    CommandStatus @default(pending)
   createdAt DateTime      @default(now())

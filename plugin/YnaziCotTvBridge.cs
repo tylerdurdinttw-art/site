@@ -15,7 +15,7 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.4.1")]
+    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.5.0")]
     [Description("Мост между игровым сервером Rust и веб-панелью YnaziCotTV: heartbeat, события, античит-статистика")]
     public class YnaziCotTvBridge : RustPlugin
     {
@@ -67,6 +67,16 @@ namespace Oxide.Plugins
             [JsonProperty("NotifyReports")] public bool NotifyReports { get; set; } = true;
             /// Как подписывать сервер в сообщении. Пусто — берётся hostname сервера.
             [JsonProperty("ServerName")] public string ServerName { get; set; } = "";
+            /// С какой по счёту жалобы на игрока к сообщению приписывается @everyone.
+            /// 0 — не упоминать вовсе.
+            [JsonProperty("MentionEveryoneFrom")] public int MentionEveryoneFrom { get; set; } = 2;
+            /// Сколько часов живёт счётчик жалоб на одного игрока. После тишины длиннее
+            /// этого срока счёт идёт заново — иначе одна старая жалоба вечно тянула бы
+            /// за собой @everyone.
+            [JsonProperty("ReportCountWindowHours")] public int ReportCountWindowHours { get; set; } = 24;
+            /// Аватарки Steam в сообщении: справа — тот, на кого жалуются, в подписи — жалобщик.
+            /// Берутся из публичного XML профиля, ключ Steam API для этого не нужен.
+            [JsonProperty("ShowAvatars")] public bool ShowAvatars { get; set; } = true;
         }
 
         private class PluginConfig
@@ -606,19 +616,74 @@ namespace Oxide.Plugins
 
             if (!_config.Discord.NotifyReports) return;
 
+            // Данные жалобщика снимаем сейчас: сообщение уходит после запросов за аватарками,
+            // а к тому моменту игрок может уже отключиться — BasePlayer станет пустым.
+            var reporterId = reporter.UserIDString;
+            var reporterName = reporter.displayName;
+
+            var count = BumpReportTally(targetId);
+            var shownName = string.IsNullOrEmpty(targetName) ? (targetId ?? "—") : targetName;
+
+            // На кого жалуются — ссылкой на профиль Steam; без валидного ID ссылки нет.
+            var target = IsSteamId(targetId)
+                ? "[" + EscapeMarkdown(Trim(shownName, 64)) + "](https://steamcommunity.com/profiles/" + targetId + ")"
+                : "**" + EscapeMarkdown(Trim(shownName, 64)) + "**";
+
             var fields = new List<object>
             {
-                DiscordField("На кого", (string.IsNullOrEmpty(targetName) ? targetId : targetName)
-                    + "\n`" + (targetId ?? "—") + "`", true),
-                DiscordField("От кого", reporter.displayName, true),
-                DiscordField("Сервер", DiscordServerName(), true)
+                DiscordField("SteamID", targetId, true),
+                DiscordField("Причина", string.IsNullOrEmpty(subject) ? type : subject, true)
             };
 
-            var reason = string.IsNullOrEmpty(subject) ? type : subject;
-            if (!string.IsNullOrEmpty(reason)) fields.Add(DiscordField("Причина", reason, false));
             if (!string.IsNullOrEmpty(message)) fields.Add(DiscordField("Комментарий", message, false));
 
-            PostToDiscord(_config.Discord.ReportsWebhook, "Новый репорт", ColorReport, fields);
+            var footer = "От: " + reporterName + " [" + reporterId + "] • " + DiscordServerName();
+
+            // Порог из конфига: первая жалоба уходит тихо, вторая и дальше — с @everyone.
+            var mentionFrom = _config.Discord.MentionEveryoneFrom;
+            var content = mentionFrom > 0 && count >= mentionFrom ? "@everyone" : null;
+
+            var webhook = _config.Discord.ReportsWebhook;
+
+            // Аватарки едут отдельными запросами в Steam, поэтому сообщение собирается
+            // во вложенных колбэках: сначала тот, на кого жалуются (картинка справа),
+            // затем жалобщик (кружок в подписи). Не ответил Steam — останемся без картинки.
+            FetchSteamAvatar(targetId, targetAvatar =>
+                FetchSteamAvatar(reporterId, reporterAvatar =>
+                {
+                    var embed = new Dictionary<string, object>
+                    {
+                        ["description"] = ReportCountPhrase(count) + " на " + target,
+                        ["color"] = ColorReport,
+                        ["fields"] = fields,
+                        ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+                    };
+
+                    if (!string.IsNullOrEmpty(targetAvatar))
+                        embed["thumbnail"] = new Dictionary<string, object> { ["url"] = targetAvatar };
+
+                    var signature = new Dictionary<string, object> { ["text"] = Trim(footer, 2048) };
+                    if (!string.IsNullOrEmpty(reporterAvatar)) signature["icon_url"] = reporterAvatar;
+                    embed["footer"] = signature;
+
+                    PostToDiscord(webhook, embed, content);
+                }));
+        }
+
+        /// «Получена 1 жалоба» / «Получено 3 жалобы» / «Получено 5 жалоб» — русский счёт
+        /// с оглядкой на десятки: 11-14 всегда «жалоб», сколько бы ни было единиц.
+        private static string ReportCountPhrase(int count)
+        {
+            var tens = count % 100;
+            var units = count % 10;
+
+            if (tens < 11 || tens > 14)
+            {
+                if (units == 1) return "Получена **" + count + "** жалоба";
+                if (units >= 2 && units <= 4) return "Получено **" + count + "** жалобы";
+            }
+
+            return "Получено **" + count + "** жалоб";
         }
 
         private void OnUserBanned(string name, string id, string ipAddress, string reason)
@@ -631,18 +696,22 @@ namespace Oxide.Plugins
                 ["reason"] = reason ?? ""
             });
 
+            // Игрока разобрали — счёт жалоб на него начинается заново.
+            if (!string.IsNullOrEmpty(id)) _reportTally.Remove(id);
+
             if (!_config.Discord.NotifyBans) return;
 
-            var fields = new List<object>
+            // Логин модератора приезжает вместе с командой из панели; бан из консоли
+            // сервера или от чужого плагина автора не несёт — там подписывать нечем.
+            string admin;
+            TakePanelAction("ban", id, out admin);
+
+            SendPunishmentToDiscord(ColorBan, "Выдал блокировку игроку", admin, id, name, new List<object>
             {
-                DiscordField("Игрок", (string.IsNullOrEmpty(name) ? id : name) + "\n`" + (id ?? "—") + "`", true),
-                DiscordField("Сервер", DiscordServerName(), true),
-                DiscordField("Выдал", WasBannedFromPanel(id) ? "Панель" : "Из игры", true)
-            };
-
-            if (!string.IsNullOrEmpty(reason)) fields.Add(DiscordField("Причина", reason, false));
-
-            PostToDiscord(_config.Discord.BansWebhook, "Новая блокировка", ColorBan, fields);
+                DiscordField("Причина", reason, true),
+                // Rust банит навсегда: `banid` срока не принимает, снимает бан только разбан.
+                DiscordField("Дата разбана", "никогда", true)
+            });
         }
 
         private void OnUserUnbanned(string name, string id, string ipAddress)
@@ -656,10 +725,47 @@ namespace Oxide.Plugins
 
             if (!_config.Discord.NotifyUnbans) return;
 
-            PostToDiscord(_config.Discord.BansWebhook, "Блокировка снята", ColorUnban, new List<object>
+            string admin;
+            TakePanelAction("unban", id, out admin);
+
+            SendPunishmentToDiscord(ColorUnban, "Снял блокировку с игрока", admin, id, name, null);
+        }
+
+        /// Общая раскладка сообщений о блокировке: сверху — кто выдал, в описании —
+        /// с кем это сделали, справа — его аватарка из Steam. Поля у бана и разбана
+        /// разные, поэтому приходят готовыми; null — сообщение без полей.
+        private void SendPunishmentToDiscord(int color, string action, string admin, string steamId,
+            string name, List<object> fields)
+        {
+            var shownName = string.IsNullOrEmpty(name) ? (steamId ?? "—") : name;
+
+            var target = IsSteamId(steamId)
+                ? "[" + EscapeMarkdown(Trim(shownName, 64)) + "](https://steamcommunity.com/profiles/" + steamId + ")"
+                : "**" + EscapeMarkdown(Trim(shownName, 64)) + "**";
+
+            var description = action + " " + target
+                              + " (" + (string.IsNullOrEmpty(steamId) ? "—" : steamId) + ")";
+
+            var author = string.IsNullOrEmpty(admin) ? "Консоль сервера" : admin;
+            var webhook = _config.Discord.BansWebhook;
+
+            FetchSteamAvatar(steamId, avatar =>
             {
-                DiscordField("Игрок", (string.IsNullOrEmpty(name) ? id : name) + "\n`" + (id ?? "—") + "`", true),
-                DiscordField("Сервер", DiscordServerName(), true)
+                var embed = new Dictionary<string, object>
+                {
+                    ["author"] = new Dictionary<string, object> { ["name"] = Trim(author, 256) },
+                    ["description"] = description,
+                    ["color"] = color,
+                    ["footer"] = new Dictionary<string, object> { ["text"] = Trim(DiscordServerName(), 2048) },
+                    ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+                };
+
+                if (fields != null && fields.Count > 0) embed["fields"] = fields;
+
+                if (!string.IsNullOrEmpty(avatar))
+                    embed["thumbnail"] = new Dictionary<string, object> { ["url"] = avatar };
+
+                PostToDiscord(webhook, embed, null);
             });
         }
 
@@ -2079,6 +2185,9 @@ namespace Oxide.Plugins
             [JsonProperty("type")] public string Type { get; set; }
             [JsonProperty("steamId")] public string SteamId { get; set; }
             [JsonProperty("reason")] public string Reason { get; set; }
+            /// Логин сотрудника панели, поставившего команду. Им подписано сообщение
+            /// в Discord; у панелей старше 1.5.0 поля нет и подпись остаётся общей.
+            [JsonProperty("admin")] public string Admin { get; set; }
         }
 
         private void ExecuteCommand(PanelCommand command)
@@ -2099,15 +2208,16 @@ namespace Oxide.Plugins
                     break;
                 case "ban":
                     EndCheck(command.SteamId);
-                    BanId(command.SteamId, reason);
+                    BanId(command.SteamId, reason, command.Admin);
                     break;
                 case "ban_team":
                     EndCheck(command.SteamId);
-                    BanTeam(command.SteamId, reason);
+                    BanTeam(command.SteamId, reason, command.Admin);
                     break;
                 case "unban":
                     // Консольная команда называется `unban`; `unbanid` в Rust нет,
                     // сервер на неё отвечает «Command 'unbanid' not found».
+                    MarkPanelAction("unban", command.SteamId, command.Admin);
                     rust.RunServerCommand("unban", command.SteamId);
                     break;
                 case "check":
@@ -2354,7 +2464,7 @@ namespace Oxide.Plugins
         }
 
         /// Бан всей команды игрока. Если команды нет — банится он один.
-        private void BanTeam(string steamId, string reason)
+        private void BanTeam(string steamId, string reason, string admin)
         {
             ulong userId;
             if (!ulong.TryParse(steamId, out userId))
@@ -2386,18 +2496,19 @@ namespace Oxide.Plugins
             foreach (var id in ids)
             {
                 EndCheck(id.ToString());
-                BanId(id.ToString(), reason);
+                BanId(id.ToString(), reason, admin);
             }
         }
 
         /// Бан по SteamID. У консольной команды три аргумента — `banid <id> <ник> <причина>`,
         /// поэтому причину нельзя ставить вторым: она уедет в поле ника, а в бан-листе
         /// сервера причина останется пустой.
-        private void BanId(string steamId, string reason)
+        private void BanId(string steamId, string reason, string admin)
         {
             // Сюда приходят только баны из панели: по этой отметке OnUserBanned
-            // отличит их от бана, выданного руками в консоли сервера.
-            MarkPanelBan(steamId);
+            // отличит их от бана, выданного руками в консоли сервера, и заодно
+            // узнает, кем он выдан.
+            MarkPanelAction("ban", steamId, admin);
 
             var name = steamId;
 
@@ -2857,12 +2968,45 @@ namespace Oxide.Plugins
         private const int ColorReport = 0xef4444;
         private const int ColorUnban = 0x22c55e;
 
-        /// Сколько держим отметку «этот бан пришёл из панели» — дольше, чем идёт
+        /// Сколько держим отметку «это пришло командой из панели» — дольше, чем идёт
         /// путь «команда → banid → OnUserBanned», но достаточно коротко, чтобы
         /// ручной бан того же игрока минутой позже уже не считался панельным.
         private const double PanelBanMarkSec = 30;
 
-        private readonly Dictionary<string, DateTime> _panelBans = new Dictionary<string, DateTime>();
+        private class PanelAction
+        {
+            public string Admin;
+            public DateTime At;
+        }
+
+        /// Ключ — «действие:SteamID». Отметку ставит команда из панели, снимает её
+        /// хук сервера: так уведомление узнаёт автора, которого сам хук не приносит.
+        private readonly Dictionary<string, PanelAction> _panelActions =
+            new Dictionary<string, PanelAction>();
+
+        /// Кэш адресов аватарок Steam: один и тот же игрок попадает в репорты пачками,
+        /// а Steam не любит частых запросов за одним и тем же профилем.
+        private readonly Dictionary<string, string> _avatarCache = new Dictionary<string, string>();
+
+        /// Серый силуэт Steam — профиль скрыт, удалён или Steam не ответил.
+        private const string DefaultAvatar =
+            "https://avatars.steamstatic.com/fef49e7fa7e1997310d705b2a6158ff8dc1cdfeb_full.jpg";
+
+        /// Символы, которые Discord считает разметкой, и знак экранирования перед ними.
+        private const string MarkdownChars = "\\*_~`>|[]()";
+        private const char EscapeChar = '\\';
+
+        private class ReportTally
+        {
+            public int Count;
+            public DateTime LastAt;
+        }
+
+        /// Сколько жалоб уже получил игрок. Счёт живёт в памяти плагина: панель считает
+        /// то же самое у себя, но по своей базе и молча — а число нужно прямо здесь,
+        /// в момент отправки сообщения.
+        private readonly Dictionary<string, ReportTally> _reportTally =
+            new Dictionary<string, ReportTally>();
 
         /// Подпись сервера в сообщении: имя из конфига, иначе hostname.
         private string DiscordServerName()
@@ -2883,25 +3027,133 @@ namespace Oxide.Plugins
             };
         }
 
-        private void MarkPanelBan(string steamId)
+        /// Который это по счёту репорт на игрока. Заодно выкидываем протухшие записи:
+        /// иначе словарь рос бы с каждым новым именем до перезагрузки плагина.
+        private int BumpReportTally(string targetId)
         {
-            if (string.IsNullOrEmpty(steamId)) return;
-            _panelBans[steamId] = DateTime.UtcNow;
+            if (string.IsNullOrEmpty(targetId)) return 1;
+
+            var window = Math.Max(1, _config.Discord.ReportCountWindowHours);
+            var now = DateTime.UtcNow;
+
+            foreach (var pair in _reportTally.ToList())
+            {
+                if ((now - pair.Value.LastAt).TotalHours >= window) _reportTally.Remove(pair.Key);
+            }
+
+            ReportTally tally;
+            if (!_reportTally.TryGetValue(targetId, out tally))
+            {
+                tally = new ReportTally();
+                _reportTally[targetId] = tally;
+            }
+
+            tally.Count++;
+            tally.LastAt = now;
+            return tally.Count;
         }
 
-        /// Бан только что выдан командой из панели? Заодно чистим протухшие отметки.
-        private bool WasBannedFromPanel(string steamId)
+        /// Ник игрока Discord читает как разметку: звёздочки, подчёркивания и скобки
+        /// в нём ломают и текст, и ссылку на профиль. Экранируем всё, что он считает своим.
+        private static string EscapeMarkdown(string value)
         {
+            if (string.IsNullOrEmpty(value)) return value;
+
+            var result = new StringBuilder(value.Length + 8);
+            foreach (var c in value)
+            {
+                if (MarkdownChars.IndexOf(c) >= 0) result.Append(EscapeChar);
+                result.Append(c);
+            }
+
+            return result.ToString();
+        }
+
+        /// Адрес аватарки для сообщения. Ключ Steam API не нужен: картинка указана
+        /// в публичном XML профиля. На ошибку отдаём серый силуэт, но в кэш его
+        /// не кладём — иначе разовый сбой Steam запомнился бы навсегда.
+        private void FetchSteamAvatar(string steamId, Action<string> onDone)
+        {
+            if (!_config.Discord.ShowAvatars || !IsSteamId(steamId))
+            {
+                onDone(null);
+                return;
+            }
+
+            string cached;
+            if (_avatarCache.TryGetValue(steamId, out cached))
+            {
+                onDone(cached);
+                return;
+            }
+
+            webrequest.Enqueue("https://steamcommunity.com/profiles/" + steamId + "?xml=1", null,
+                (code, response) =>
+                {
+                    var url = code >= 200 && code < 300 ? ParseSteamAvatar(response) : null;
+
+                    if (!string.IsNullOrEmpty(url))
+                    {
+                        // Кэш чистим целиком: аватарки меняются редко, точность тут не важна.
+                        if (_avatarCache.Count >= 512) _avatarCache.Clear();
+                        _avatarCache[steamId] = url;
+                    }
+
+                    onDone(string.IsNullOrEmpty(url) ? DefaultAvatar : url);
+                }, this, RequestMethod.GET, null, 10f);
+        }
+
+        /// Адрес из тега avatarFull. Разбираем строкой: XML-парсер ради одного тега
+        /// тянуть незачем, а формат ответа Steam не меняет годами.
+        private static string ParseSteamAvatar(string xml)
+        {
+            if (string.IsNullOrEmpty(xml)) return null;
+
+            const string tag = "<avatarFull>";
+            var start = xml.IndexOf(tag, StringComparison.OrdinalIgnoreCase);
+            if (start < 0) return null;
+            start += tag.Length;
+
+            var end = xml.IndexOf("</avatarFull>", start, StringComparison.OrdinalIgnoreCase);
+            if (end < 0) return null;
+
+            var url = xml.Substring(start, end - start)
+                .Replace("<![CDATA[", "")
+                .Replace("]]>", "")
+                .Trim();
+
+            return url.StartsWith("https://", StringComparison.OrdinalIgnoreCase) ? url : null;
+        }
+
+        private void MarkPanelAction(string kind, string steamId, string admin)
+        {
+            if (string.IsNullOrEmpty(steamId)) return;
+            _panelActions[kind + ":" + steamId] = new PanelAction { Admin = admin, At = DateTime.UtcNow };
+        }
+
+        /// Действие только что пришло командой из панели? Тогда отдаёт и логин
+        /// сотрудника. Заодно чистим протухшие отметки: отметка одноразовая,
+        /// следующий бан того же игрока считается новым.
+        private bool TakePanelAction(string kind, string steamId, out string admin)
+        {
+            admin = null;
             if (string.IsNullOrEmpty(steamId)) return false;
 
-            var stale = _panelBans
-                .Where(pair => (DateTime.UtcNow - pair.Value).TotalSeconds > PanelBanMarkSec)
+            var stale = _panelActions
+                .Where(pair => (DateTime.UtcNow - pair.Value.At).TotalSeconds > PanelBanMarkSec)
                 .Select(pair => pair.Key)
                 .ToList();
-            foreach (var key in stale) _panelBans.Remove(key);
+            foreach (var key in stale) _panelActions.Remove(key);
 
-            // Отметка одноразовая: следующий бан того же игрока считается новым.
-            return _panelBans.Remove(steamId);
+            var mark = kind + ":" + steamId;
+
+            PanelAction action;
+            if (!_panelActions.TryGetValue(mark, out action)) return false;
+
+            _panelActions.Remove(mark);
+            // Панель старше 1.5.0 логина не присылает — подписываем такое сообщение ею самой.
+            admin = string.IsNullOrEmpty(action.Admin) ? "Панель" : action.Admin;
+            return true;
         }
 
         /// Сообщение в Discord — напрямую с игрового сервера, мимо панели и мимо её очереди.
@@ -2910,6 +3162,21 @@ namespace Oxide.Plugins
         /// и ретраи, а Discord ничего этого не понимает. Недоставленное сообщение просто
         /// теряется с предупреждением в консоли: уведомление не повод копить очередь.
         private void PostToDiscord(string webhookUrl, string title, int color, List<object> fields,
+            Action<int, string> onDone = null)
+        {
+            PostToDiscord(webhookUrl, new Dictionary<string, object>
+            {
+                ["title"] = title,
+                ["color"] = color,
+                ["fields"] = fields,
+                ["footer"] = new Dictionary<string, object> { ["text"] = "YnaziCotTV" },
+                ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+            }, null, onDone);
+        }
+
+        /// Тот же путь, но с готовым embed: сообщение о репорте собирает его само —
+        /// с картинкой профиля, подписью жалобщика и упоминанием (content) над embed.
+        private void PostToDiscord(string webhookUrl, Dictionary<string, object> embed, string content,
             Action<int, string> onDone = null)
         {
             if (string.IsNullOrEmpty(webhookUrl)) return;
@@ -2922,20 +3189,23 @@ namespace Oxide.Plugins
                 return;
             }
 
-            var embed = new Dictionary<string, object>
-            {
-                ["title"] = title,
-                ["color"] = color,
-                ["fields"] = fields,
-                ["footer"] = new Dictionary<string, object> { ["text"] = "YnaziCotTV" },
-                ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
-            };
-
-            var body = JsonConvert.SerializeObject(new Dictionary<string, object>
+            var payload = new Dictionary<string, object>
             {
                 ["username"] = "YnaziCotTV",
                 ["embeds"] = new List<object> { embed }
-            });
+            };
+
+            if (!string.IsNullOrEmpty(content))
+            {
+                payload["content"] = content;
+                // Без явного разрешения Discord показал бы @everyone из вебхука обычным текстом.
+                payload["allowed_mentions"] = new Dictionary<string, object>
+                {
+                    ["parse"] = new List<string> { "everyone" }
+                };
+            }
+
+            var body = JsonConvert.SerializeObject(payload);
 
             var headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" };
 

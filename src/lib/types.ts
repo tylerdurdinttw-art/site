@@ -217,6 +217,8 @@ export interface IngestEventBody {
 
 export interface PanelCommand {
   id: string;
+  /** Логин сотрудника, поставившего команду: плагин подписывает им сообщение в Discord. */
+  admin?: string | null;
   /**
    * check — предупреждение о вызове на проверку;
    * check_banner / check_banner_hide — баннер на весь экран;

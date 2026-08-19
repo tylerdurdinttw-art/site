@@ -23,7 +23,10 @@ const SNIPPET = `"Discord": {
   "NotifyBans": true,
   "NotifyUnbans": true,
   "NotifyReports": true,
-  "ServerName": ""
+  "ServerName": "",
+  "MentionEveryoneFrom": 2,
+  "ReportCountWindowHours": 24,
+  "ShowAvatars": true
 }`;
 
 /** Кнопка «скопировать» у блока кода. */
@@ -123,9 +126,17 @@ export default function IntegrationsView() {
           <table className="w-full border-collapse text-[12px]">
             <tbody>
               {[
-                ['BansWebhook', 'Новая блокировка: игрок, сервер, причина и кто выдал — панель или консоль сервера'],
-                ['BansWebhook', 'Снятие блокировки: игрок и сервер'],
-                ['ReportsWebhook', 'Жалоба игрока: на кого, от кого, причина и комментарий'],
+                [
+                  'BansWebhook',
+                  'Новая блокировка: кто выдал, игрок (со ссылкой на профиль и аватаркой), '
+                    + 'причина и дата разбана',
+                ],
+                ['BansWebhook', 'Снятие блокировки: кто снял и с кого'],
+                [
+                  'ReportsWebhook',
+                  'Жалоба игрока: на кого (со ссылкой на профиль и аватаркой), какая она по счёту, '
+                    + 'причина, комментарий и от кого',
+                ],
               ].map(([key, what], i) => (
                 <tr key={i} className="border-b border-border last:border-b-0">
                   <td className="whitespace-nowrap px-4 py-2.5 align-top font-mono text-[11px] text-text-muted">
@@ -142,6 +153,12 @@ export default function IntegrationsView() {
           <span className="font-mono">NotifyBans</span>,{' '}
           <span className="font-mono">NotifyUnbans</span> и{' '}
           <span className="font-mono">NotifyReports</span>, не стирая адрес.
+        </p>
+        <p className="px-1 pt-1 text-[12px] leading-relaxed text-text-dim">
+          Со второй жалобы на одного и того же игрока сообщение уходит с{' '}
+          <span className="font-mono">@everyone</span>: порог задаёт{' '}
+          <span className="font-mono">MentionEveryoneFrom</span>, а{' '}
+          <span className="font-mono">0</span> убирает упоминание совсем.
         </p>
       </Section>
     </SettingsPage>

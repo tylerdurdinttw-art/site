@@ -33,8 +33,11 @@ export async function queueCommand(
   type: CheckCommandType,
   steamId: string,
   reason = '',
+  admin: string | null = null,
 ): Promise<void> {
-  await prisma.serverCommand.create({ data: { projectId, serverId, type, steamId, reason } });
+  await prisma.serverCommand.create({
+    data: { projectId, serverId, type, steamId, reason, admin },
+  });
 }
 
 function toMessage(row: {

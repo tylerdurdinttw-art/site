@@ -32,6 +32,7 @@ export async function GET(req: Request) {
     type: r.type as PanelCommand['type'],
     steamId: r.steamId,
     reason: r.reason,
+    admin: r.admin,
   }));
 
   return NextResponse.json({ commands }, { headers: { 'cache-control': 'no-store' } });

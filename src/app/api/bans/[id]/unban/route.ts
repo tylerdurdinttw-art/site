@@ -29,7 +29,7 @@ export async function POST(_req: Request, { params }: { params: { id: string } }
     data: { active: false, unbannedAt: new Date() },
   });
 
-  await queueCommand(projectId, ban.serverId, 'unban', ban.steamId, '');
+  await queueCommand(projectId, ban.serverId, 'unban', ban.steamId, '', ctx.user.login);
 
   return NextResponse.json({ ok: true });
 }

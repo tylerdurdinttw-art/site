@@ -36,7 +36,7 @@ export async function POST() {
     const key = `${ban.serverId}:${ban.steamId}`;
     if (seen.has(key)) continue;
     seen.add(key);
-    await queueCommand(projectId, ban.serverId, 'unban', ban.steamId, '');
+    await queueCommand(projectId, ban.serverId, 'unban', ban.steamId, '', ctx.user.login);
   }
 
   return NextResponse.json({ ok: true, unbanned: active.length });
