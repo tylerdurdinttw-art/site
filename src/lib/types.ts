@@ -188,6 +188,8 @@ export interface HeartbeatPlayer {
   licensed?: boolean;
   /** Размер команды из RelationshipManager: 1 — соло, 2 — дуо и так далее. */
   teamSize?: number;
+  /** currentTeam из RelationshipManager. "0" или пусто — игрок вне команды. */
+  teamId?: string;
   /** Язык клиента ("ru", "en", …). */
   language?: string;
 }

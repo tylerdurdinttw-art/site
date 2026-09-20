@@ -1,5 +1,5 @@
 import { redirect } from 'next/navigation';
-import { requireProjectUser } from '@/lib/auth';
+import { requireProjectManager } from '@/lib/auth';
 import { getProjectState } from '@/lib/project';
 import { listServers } from '@/lib/overview';
 import ServersView from '@/components/ServersView';
@@ -8,7 +8,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export default async function ServersPage() {
-  const user = await requireProjectUser();
+  const user = await requireProjectManager();
   const project = await getProjectState(user.projectId);
   if (!project) redirect('/welcome');
 

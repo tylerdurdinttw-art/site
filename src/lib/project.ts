@@ -2,9 +2,10 @@ import { randomBytes } from 'node:crypto';
 import { prisma } from '@/lib/prisma';
 import { accessStateOf, type AccessState } from '@/lib/accessShared';
 import { ALL_PERMISSION_KEYS } from '@/lib/permissions';
+import { isDeveloper } from '@/lib/devShared';
 import type { ProjectState, StaffRow } from '@/lib/projectShared';
 
-import { projectPublicId } from '@/lib/projectShared';
+import { COOWNER_ROLE, projectPublicId } from '@/lib/projectShared';
 
 export { ONBOARDING_STEPS, projectPublicId, slugify } from '@/lib/projectShared';
 export type { ProjectState, StaffRow } from '@/lib/projectShared';
@@ -15,6 +16,7 @@ export function generateInviteCode(): string {
 
 export function toStaffRow(row: {
   id: string;
+  userId: string | null;
   name: string;
   contact: string | null;
   role: string;
@@ -23,18 +25,43 @@ export function toStaffRow(row: {
   invitedAt: Date;
   acceptedAt: Date | null;
 }): StaffRow {
+  const full = row.role === 'owner' || row.role === COOWNER_ROLE;
+
   return {
     id: row.id,
+    userId: row.userId,
     name: row.name,
     contact: row.contact,
     role: row.role,
-    // У владельца права полные всегда: если в базе осталась урезанная строка от
-    // старых версий панели, показываем и отдаём набор целиком.
-    permissions: row.role === 'owner' ? [...ALL_PERMISSION_KEYS] : row.permissions,
+    // У владельца и второго владельца права полные всегда: если в базе осталась
+    // урезанная строка от старых версий панели, отдаём набор целиком.
+    permissions: full ? [...ALL_PERMISSION_KEYS] : row.permissions,
     inviteCode: row.inviteCode,
     invitedAt: row.invitedAt.toISOString(),
     acceptedAt: row.acceptedAt?.toISOString() ?? null,
   };
+}
+
+/**
+ * Пускать ли человека в группы «Управление» и «Проект».
+ *
+ * Разработчик сайта проходит всегда: он заходит в чужие проекты чинить их и без
+ * доступа к настройкам и серверам там делать нечего.
+ */
+export async function canManageProjectUser(
+  projectId: string,
+  userId: string,
+  login: string,
+): Promise<boolean> {
+  if (isDeveloper(login)) return true;
+
+  const staff = await prisma.staff.findFirst({
+    where: { projectId, userId },
+    select: { role: true },
+  });
+  if (!staff) return false;
+
+  return staff.role === 'owner' || staff.role === COOWNER_ROLE;
 }
 
 /** Состояние проекта пользователя. null — проекта у него ещё нет. */

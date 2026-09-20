@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import { sanitizePermissions } from '@/lib/permissions';
-import { generateInviteCode, toStaffRow } from '@/lib/project';
+import { canManageProjectUser, generateInviteCode, toStaffRow } from '@/lib/project';
 import { isDenied, requireApiProject } from '@/lib/apiAuth';
 
 export const runtime = 'nodejs';
@@ -13,6 +13,12 @@ export async function GET() {
   const ctx = await requireApiProject();
   if (isDenied(ctx)) return ctx;
   const { projectId } = ctx;
+
+  // В списке лежат коды приглашений — по ним в проект входят. Отдавать его
+  // всем сотрудникам нельзя: раздел и так открыт только владельцам.
+  if (!(await canManageProjectUser(projectId, ctx.user.id, ctx.user.login))) {
+    return NextResponse.json({ error: 'Недостаточно прав.' }, { status: 403 });
+  }
 
   const staff = await prisma.staff.findMany({
     where: { projectId },
@@ -31,6 +37,11 @@ export async function POST(req: Request) {
   const ctx = await requireApiProject();
   if (isDenied(ctx)) return ctx;
   const { projectId } = ctx;
+
+  // Раздел «Сотрудники» живёт в группе «Проект» — она только у владельцев.
+  if (!(await canManageProjectUser(projectId, ctx.user.id, ctx.user.login))) {
+    return NextResponse.json({ error: 'Недостаточно прав.' }, { status: 403 });
+  }
 
   const body = (await req.json().catch(() => ({}))) as {
     name?: string;

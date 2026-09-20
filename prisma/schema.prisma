@@ -176,6 +176,9 @@ model Player {
 
   /// Размер команды из RelationshipManager: 1 — соло, 2 — дуо, 3 — трио, 4 — сквад, 5+ — клан.
   teamSize Int @default(1)
+  /// Идентификатор команды из RelationshipManager (currentTeam). null — игрок вне команды.
+  /// По нему собирается вкладка «Команда»: состав — это все игроки сервера с тем же teamId.
+  teamId String?
   /// Язык клиента ("ru", "en", …) — из lang.GetLanguage на игровом сервере.
   language String?
   /// Дискорд, который игрок назвал командой /ds после вызова на проверку.
@@ -205,6 +208,7 @@ model Player {
   @@unique([projectId, steamId])
   @@index([status])
   @@index([serverId])
+  @@index([serverId, teamId])
   @@map("players")
 }
 
@@ -331,6 +335,13 @@ model SteamProfile {
   steamId     String  @id
   personaName String?
   avatarUrl   String?
+
+  /// Сама картинка аватара. Панель отдаёт её своим эндпоинтом /api/avatar/<steamId>:
+  /// CDN Steam отвечает не отовсюду и не всегда быстро, а из базы аватар приходит сразу.
+  avatarImage Bytes?
+  avatarType  String?
+  /// Когда последний раз обновляли аватар — у него свой срок, независимый от часов и банов.
+  avatarFetchedAt DateTime?
 
   /// Наиграно в Rust (appid 252490), минут. null — профиль закрыт или игра скрыта.
   rustMinutes Int?
@@ -629,7 +640,9 @@ model Staff {
   name    String
   /// Discord, Steam или почта — как связаться с человеком.
   contact String?
-  /// owner — создатель проекта, moderator — приглашённый.
+  /// owner — создатель проекта, coowner — второй владелец (его назначает владелец
+  /// в разделе «Сотрудники»), moderator — обычный приглашённый.
+  /// Владелец и второй владелец видят группы «Управление» и «Проект».
   role    String  @default("moderator")
 
   /// Ключи прав из lib/permissions.ts: check, ban, unban, mute, kick, chat, reports, servers, settings.

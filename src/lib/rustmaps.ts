@@ -1,9 +1,11 @@
 import { prisma } from '@/lib/prisma';
+import { getRustMapsApiKey } from '@/lib/appSettings';
 
 /**
  * Карты с rustmaps.com по паре seed + размер мира.
  *
- * Ключ берётся из RUSTMAPS_API_KEY (регистрация на rustmaps.com -> Dashboard -> API keys).
+ * Ключ задаётся в разделе «Разработка», а если там пусто — берётся из
+ * RUSTMAPS_API_KEY (регистрация на rustmaps.com -> Dashboard -> API keys).
  * Картинка скачивается один раз и кладётся в таблицу rustmaps_images: дальше панель
  * отдаёт её из базы и наружу не ходит.
  */
@@ -37,8 +39,8 @@ interface RustMapsResponse {
   [key: string]: unknown;
 }
 
-function apiKey(): string | null {
-  const key = process.env.RUSTMAPS_API_KEY?.trim();
+async function apiKey(): Promise<string | null> {
+  const key = await getRustMapsApiKey();
   return key ? key : null;
 }
 
@@ -75,7 +77,7 @@ export async function ensureRustMap(seed: number, worldSize: number): Promise<Ru
 
   if (cached?.image && cached.image.length > 0) return { state: 'ready', key };
 
-  const token = apiKey();
+  const token = await apiKey();
   if (!token) return { state: 'no_key' };
 
   // Недавняя неудача — не дёргаем API на каждый заход на страницу.
@@ -188,4 +190,26 @@ export async function getCachedImage(key: string) {
   const row = await prisma.rustMapImage.findUnique({ where: { key } });
   if (!row?.image || row.image.length === 0) return null;
   return { image: Buffer.from(row.image), contentType: row.contentType };
+}
+
+/**
+ * Проверка ключа для раздела «Разработка»: спрашиваем карту известного вайпа.
+ * Отказ по ключу rustmaps отдаёт как 401/403, всё остальное — уже про карту,
+ * а не про ключ, и считается успехом.
+ */
+export async function checkRustMapsKey(key: string): Promise<{ ok: boolean; error?: string }> {
+  let res: Response;
+  try {
+    res = await withTimeout(`${API_BASE}/maps/1337/3500?staging=false`, {
+      headers: { 'X-API-Key': key, accept: 'application/json' },
+    });
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'запрос не ушёл' };
+  }
+
+  if (res.status === 401 || res.status === 403) return { ok: false, error: 'rustmaps отклонил ключ' };
+  if (res.status === 429) return { ok: false, error: 'rustmaps: лимит запросов исчерпан' };
+  if (res.status >= 500) return { ok: false, error: `rustmaps ответил ${res.status}` };
+
+  return { ok: true };
 }

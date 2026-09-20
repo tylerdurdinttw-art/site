@@ -20,7 +20,7 @@ interface Props {
 type PairStatus = 'pending' | 'paired' | 'expired' | 'unknown';
 
 const POLL_MS = 3000;
-const PLUGIN_FILE = 'YnaziCotTvBridge.cs';
+const PLUGIN_FILE = 'QuickPanelBridge.cs';
 
 /**
  * Подключение сервера. Механика прежняя: панель выдаёт одноразовый код,
@@ -96,7 +96,7 @@ export default function ConnectServerModal({
     return () => document.removeEventListener('keydown', onKey);
   }, [onClose]);
 
-  const command = code ? `ynazicottv.setup ${code}` : '';
+  const command = code ? `quickpanel.setup ${code}` : '';
 
   const copy = async () => {
     if (!command) return;

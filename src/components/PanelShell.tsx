@@ -31,6 +31,13 @@ export default function PanelShell({
   const pathname = usePathname();
   const router = useRouter();
 
+  // Пока открыт рабочий раздел, документ не скроллится: прокручивается только
+  // правая колонка. Иначе у неё и у страницы оказывалось по своей полосе.
+  useEffect(() => {
+    document.documentElement.classList.add('panel-locked');
+    return () => document.documentElement.classList.remove('panel-locked');
+  }, []);
+
   const devArea = isDeveloper(user.login) && pathname === '/dev';
   const expired = !project.access.active && !devArea;
   const locked = !expired && !devArea && !project.done && pathname !== '/start';
@@ -40,11 +47,11 @@ export default function PanelShell({
   }, [locked, router]);
 
   return (
-    <div className="flex min-h-screen">
+    <div className="flex h-full overflow-hidden">
       {/* Сайдбару важен сам срок, а не поблажка для «Разработки»: остальные пункты
           при закрытом доступе должны оставаться погашенными и на ней. */}
       <Sidebar project={project} user={user} expired={!project.access.active} />
-      <main className="h-screen flex-1 overflow-y-auto scrollbar-thin">
+      <main className="h-full min-w-0 flex-1 overflow-y-auto scrollbar-thin">
         {expired ? <RenewView project={project} /> : locked ? null : children}
       </main>
     </div>

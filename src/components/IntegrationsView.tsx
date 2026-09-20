@@ -15,7 +15,7 @@ import { APP_NAME } from '@/lib/brand';
  * смысла нет: он всё равно нужен на игровом сервере.
  */
 
-const CONFIG_PATH = 'oxide/config/YnaziCotTvBridge.json';
+const CONFIG_PATH = 'oxide/config/QuickPanelBridge.json';
 
 const SNIPPET = `"Discord": {
   "BansWebhook": "https://discord.com/api/webhooks/...",
@@ -23,6 +23,7 @@ const SNIPPET = `"Discord": {
   "NotifyBans": true,
   "NotifyUnbans": true,
   "NotifyReports": true,
+  "NotifyChecks": true,
   "ServerName": "",
   "PanelUrl": "https://quickrust.online",
   "MentionEveryoneFrom": 2,
@@ -115,7 +116,7 @@ export default function IntegrationsView() {
 
         <Step n={3} title="Перезагрузите плагин">
           <p className="text-[12px] leading-relaxed text-text-dim">
-            В консоли сервера: <span className="font-mono text-text-muted">oxide.reload YnaziCotTvBridge</span>.
+            В консоли сервера: <span className="font-mono text-text-muted">oxide.reload QuickPanelBridge</span>.
             Первый же бан или репорт уйдёт в канал. Если что-то не так, плагин напишет
             причину в консоль — например, что с сервера не открывается discord.com.
           </p>
@@ -138,6 +139,11 @@ export default function IntegrationsView() {
                   'Жалоба игрока: на кого (ник ведёт в его карточку в панели), какая она по счёту, '
                     + 'причина, комментарий и от кого',
                 ],
+                [
+                  'ReportsWebhook',
+                  'Начало проверки: кто из сотрудников вызвал игрока и кого именно — '
+                    + 'проверки обычно и начинаются с жалоб, поэтому канал тот же',
+                ],
               ].map(([key, what], i) => (
                 <tr key={i} className="border-b border-border last:border-b-0">
                   <td className="whitespace-nowrap px-4 py-2.5 align-top font-mono text-[11px] text-text-muted">
@@ -150,10 +156,11 @@ export default function IntegrationsView() {
           </table>
         </div>
         <p className="px-1 pt-1 text-[12px] leading-relaxed text-text-dim">
-          Выключить любое из трёх можно флагами{' '}
+          Выключить любое из четырёх можно флагами{' '}
           <span className="font-mono">NotifyBans</span>,{' '}
-          <span className="font-mono">NotifyUnbans</span> и{' '}
-          <span className="font-mono">NotifyReports</span>, не стирая адрес.
+          <span className="font-mono">NotifyUnbans</span>,{' '}
+          <span className="font-mono">NotifyReports</span> и{' '}
+          <span className="font-mono">NotifyChecks</span>, не стирая адрес.
         </p>
         <p className="px-1 pt-1 text-[12px] leading-relaxed text-text-dim">
           Со второй жалобы на одного и того же игрока сообщение уходит с{' '}

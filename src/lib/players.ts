@@ -1,7 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import { gridSquare } from '@/lib/grid';
 import { getPositions } from '@/lib/positions';
-import { getSteamInfo } from '@/lib/steam';
+import { ensureAvatars, getSteamInfo } from '@/lib/steam';
 import { lookupIp } from '@/lib/geo';
 import type {
   ClientType,
@@ -50,6 +50,11 @@ export async function listPlayers(projectId: string): Promise<Player[]> {
       })
     : [];
   const avatarMap = new Map(avatarRows.map((r) => [r.steamId, r.avatarUrl]));
+
+  // Кого в кеше нет — досылаем пачкой в фоне, одним запросом на сотню профилей.
+  // Ответ этого списка ждать не должен: картинки подтянутся к следующему опросу.
+  const cold = rows.map((r) => r.steamId).filter((id) => !avatarMap.has(id));
+  if (cold.length > 0) void ensureAvatars(cold).catch(() => undefined);
 
   return rows.map((row) => {
     const info = row.ip ? ipMap.get(row.ip) : undefined;
@@ -164,31 +169,56 @@ export function kdRatio(kills: number, deaths: number): number {
   return kills / deaths;
 }
 
-/** Состав команды: игроки того же сервера с той же командой из RelationshipManager. */
+/**
+ * Состав команды игрока.
+ *
+ * Основной источник — teamId: плагин присылает его в heartbeat вместе с размером
+ * команды, поэтому состав всегда соответствует текущему моменту и переживает
+ * перезагрузку плагина. Раньше вкладка читала последнее событие `team_updated`,
+ * которого плагин никогда не слал, — поэтому она и была всегда пустой.
+ *
+ * Событие всё же разбирается вторым источником: его шлют сборки плагина,
+ * умеющие отдавать состав, но не teamId.
+ */
 async function teamMates(
   projectId: string,
   steamId: string,
   serverId: string | null,
+  teamId: string | null,
 ): Promise<TeamMate[]> {
   if (!serverId) return [];
 
-  const events = await prisma.playerEvent.findMany({
-    where: { projectId, serverId, steamId, type: 'team_updated' },
-    orderBy: { createdAt: 'desc' },
-    take: 1,
-    select: { payload: true },
-  });
+  let ids: string[] = [];
 
-  const payload = (events[0]?.payload ?? {}) as { members?: unknown };
-  const ids = Array.isArray(payload.members)
-    ? payload.members.filter((v): v is string => typeof v === 'string' && v !== steamId)
-    : [];
+  if (teamId) {
+    const mates = await prisma.player.findMany({
+      where: { projectId, serverId, teamId, steamId: { not: steamId } },
+      select: { steamId: true },
+    });
+    ids = mates.map((m) => m.steamId);
+  }
+
+  if (ids.length === 0) {
+    const events = await prisma.playerEvent.findMany({
+      where: { projectId, serverId, steamId, type: 'team_updated' },
+      orderBy: { createdAt: 'desc' },
+      take: 1,
+      select: { payload: true },
+    });
+
+    const payload = (events[0]?.payload ?? {}) as { members?: unknown };
+    ids = Array.isArray(payload.members)
+      ? payload.members.filter((v): v is string => typeof v === 'string' && v !== steamId)
+      : [];
+  }
+
   if (ids.length === 0) return [];
 
   const [players, avatars] = await Promise.all([
     prisma.player.findMany({
       where: { projectId, steamId: { in: ids } },
       select: { steamId: true, name: true, status: true },
+      orderBy: [{ status: 'asc' }, { name: 'asc' }],
     }),
     prisma.steamProfile.findMany({
       where: { steamId: { in: ids }, avatarUrl: { not: null } },
@@ -256,7 +286,7 @@ export async function getPlayerDetails(
       playtimeSec(projectId, steamId),
       currentSessionSec(projectId, steamId),
       combatStats(projectId, steamId),
-      teamMates(projectId, steamId, row.serverId),
+      teamMates(projectId, steamId, row.serverId, row.teamId),
       playerReports(projectId, steamId),
       playerActivity(projectId, steamId),
       prisma.steamProfile.findUnique({ where: { steamId }, select: { avatarUrl: true } }),

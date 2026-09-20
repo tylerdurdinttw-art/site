@@ -1,3 +1,6 @@
+'use client';
+
+import { useEffect, useState } from 'react';
 import type { PlayerStatus } from '@/lib/types';
 
 const STATUS_COLOR: Record<PlayerStatus, string> = {
@@ -6,26 +9,52 @@ const STATUS_COLOR: Record<PlayerStatus, string> = {
   offline: 'var(--text-dim)',
 };
 
+/** SteamID64 лицензионного клиента — только у таких вообще есть аватар. */
+const STEAM_ID_64 = /^7656119\d{10}$/;
+
 interface Props {
   name: string;
+  /** SteamID: с ним картинка берётся из кеша панели, а не с CDN Steam. */
+  steamId?: string | null;
   avatarUrl?: string | null;
   status?: PlayerStatus;
   size?: number;
 }
 
-/** Аватар игрока с точкой статуса. Без картинки — первая буква ника. */
-export default function Avatar({ name, avatarUrl, status, size = 36 }: Props) {
+/**
+ * Аватар игрока с точкой статуса. Без картинки — первая буква ника.
+ *
+ * Источник по возможности свой: /api/avatar/<steamId> отдаёт картинку из базы
+ * панели. CDN Steam открывается не отовсюду и отвечает медленно — из-за него
+ * аватарки грузились через раз. Прямая ссылка остаётся запасным вариантом,
+ * а если не сработала и она — рисуется буква.
+ */
+export default function Avatar({ name, steamId, avatarUrl, status, size = 36 }: Props) {
+  const proxied = steamId && STEAM_ID_64.test(steamId) ? `/api/avatar/${steamId}` : null;
+  const sources = [proxied, avatarUrl].filter((src): src is string => Boolean(src));
+
+  const [attempt, setAttempt] = useState(0);
+  // Игрок в строке мог смениться (список перерисовался) — начинаем подбор заново.
+  useEffect(() => setAttempt(0), [proxied, avatarUrl]);
+
+  const src = sources[attempt] ?? null;
   const dot = Math.max(8, Math.round(size * 0.28));
 
   return (
     <span className="relative inline-block shrink-0" style={{ width: size, height: size }}>
-      {avatarUrl ? (
-        // Аватары лежат на CDN Steam; гонять их через оптимизатор next/image смысла нет.
+      {src ? (
+        // Картинка отдаётся своим эндпоинтом из базы — оптимизатор next/image тут не нужен.
         // eslint-disable-next-line @next/next/no-img-element
         <img
-          src={avatarUrl}
+          key={src}
+          src={src}
           alt=""
-          className="h-full w-full rounded-full object-cover"
+          width={size}
+          height={size}
+          loading="lazy"
+          decoding="async"
+          onError={() => setAttempt((n) => n + 1)}
+          className="h-full w-full rounded-full bg-surface-hover object-cover"
           referrerPolicy="no-referrer"
         />
       ) : (

@@ -37,7 +37,12 @@ export async function GET(req: Request) {
         );
       };
 
-      const onEvent = (event: PanelEvent) => send(event);
+      // Шина общая на процесс, поэтому чужие проекты отсекаются здесь же —
+      // иначе поллинг (eventsSince) и SSE показывали бы разное.
+      const onEvent = (event: PanelEvent) => {
+        if (event.projectId !== projectId) return;
+        send(event);
+      };
 
       controller.enqueue(encoder.encode(': connected\n\n'));
       bus.on('event', onEvent);

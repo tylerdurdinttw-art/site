@@ -18,15 +18,18 @@ export function isDeveloper(login: string | null | undefined): boolean {
   return DEVELOPERS.has(login.trim().toLowerCase());
 }
 
-/** Что раздел знает о ключе Steam: само значение наружу не отдаётся. */
-export interface SteamKeyState {
+/** Что раздел знает о ключе внешнего сервиса: само значение наружу не отдаётся. */
+export interface ApiKeyState {
   /** Ключ задан — из базы или из переменной окружения. */
   present: boolean;
   /** Хвост ключа для опознания: «…A1B2». Пусто, если ключа нет. */
   hint: string;
-  /** Ключ взят из STEAM_API_KEY: его можно перекрыть значением из базы, но не стереть отсюда. */
+  /** Ключ взят из переменной окружения: его можно перекрыть из базы, но не стереть отсюда. */
   fromEnv: boolean;
 }
+
+/** Прежнее имя того же типа — им пользуется карточка ключа Steam. */
+export type SteamKeyState = ApiKeyState;
 
 /** Строка списка проектов в разделе «Разработка». */
 export interface DevProjectRow {
@@ -46,6 +49,16 @@ export interface DevProjectRow {
 /** Ключ Steam Web API — 32 шестнадцатеричных символа. */
 export function isSteamApiKey(raw: string): boolean {
   return /^[0-9A-Fa-f]{32}$/.test(raw.trim());
+}
+
+/**
+ * Ключ rustmaps.com. Формат они не обещают (сейчас это UUID), поэтому проверяем
+ * только очевидное: без пробелов и разумной длины. Настоящую проверку делает
+ * кнопка «Проверить» — она спрашивает сам rustmaps.
+ */
+export function isRustMapsApiKey(raw: string): boolean {
+  const key = raw.trim();
+  return key.length >= 16 && key.length <= 128 && !/\s/.test(key);
 }
 
 /** Хвост ключа для показа в интерфейсе. */

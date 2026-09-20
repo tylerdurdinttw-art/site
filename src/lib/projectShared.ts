@@ -27,6 +27,8 @@ export function projectPublicId(seed: string): number {
 
 export interface StaffRow {
   id: string;
+  /** Учётка, принявшая приглашение; null — кодом ещё никто не воспользовался. */
+  userId: string | null;
   name: string;
   contact: string | null;
   role: string;
@@ -53,9 +55,39 @@ export interface ProjectState {
   access: AccessState;
 }
 
-/** Владелец проекта — он ровно один и правится только через базу. */
+/** Владелец проекта — создатель, он ровно один и меняется только через базу. */
 export function isOwner(member: StaffRow): boolean {
   return member.role === 'owner';
+}
+
+/** Роль второго владельца в таблице staff. */
+export const COOWNER_ROLE = 'coowner';
+
+/**
+ * Второй владелец. Его назначает владелец в разделе «Сотрудники», и такой
+ * сотрудник тоже один: назначение нового снимает роль с прежнего.
+ */
+export function isCoOwner(member: StaffRow): boolean {
+  return member.role === COOWNER_ROLE;
+}
+
+/**
+ * Кому открыты группы «Управление» и «Проект»: владельцу и второму владельцу.
+ * Остальным сотрудникам эти разделы не видны и не открываются по прямой ссылке.
+ */
+export function isProjectManager(member: StaffRow): boolean {
+  return isOwner(member) || isCoOwner(member);
+}
+
+/** Запись сотрудника по учётке. null — человека в проекте нет. */
+export function staffOfUser(staff: StaffRow[], userId: string): StaffRow | null {
+  return staff.find((member) => member.userId === userId) ?? null;
+}
+
+/** Он владелец или второй владелец этого проекта? */
+export function canManageProject(staff: StaffRow[], userId: string): boolean {
+  const member = staffOfUser(staff, userId);
+  return member ? isProjectManager(member) : false;
 }
 
 /** Сотрудники без владельца: приглашения и права касаются только их. */

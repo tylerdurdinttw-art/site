@@ -174,6 +174,7 @@ function PlayerPanel({
       <div className="flex items-center gap-3">
         <Avatar
           name={player?.name ?? check.name}
+          steamId={check.steamId}
           avatarUrl={player?.avatarUrl}
           status={player?.status}
           size={48}
@@ -692,7 +693,7 @@ export default function CheckRoom({ checkId }: { checkId: string }) {
 
   if (notFound) {
     return (
-      <div className="flex min-h-screen flex-col items-center justify-center gap-3 text-center">
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-center">
         <div className="text-[15px] font-semibold">Проверка не найдена</div>
         <Link href="/checks" className="btn-ghost py-2">
           К списку проверок
@@ -702,7 +703,7 @@ export default function CheckRoom({ checkId }: { checkId: string }) {
   }
 
   return (
-    <div className="flex h-screen flex-col">
+    <div className="flex h-full flex-col">
       {/* ================= хлебные крошки ================= */}
       <div className="flex h-[58px] shrink-0 items-center gap-1.5 border-b border-border px-6">
         <Link href="/checks" className="text-[13px] text-text-muted transition-colors hover:text-text">

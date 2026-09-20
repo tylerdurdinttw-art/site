@@ -1,10 +1,26 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { CalendarClock, Check, Key, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
+import {
+  CalendarClock,
+  Check,
+  Key,
+  KeyRound,
+  Loader2,
+  Map as MapIcon,
+  RefreshCw,
+  ShieldCheck,
+} from 'lucide-react';
 import { Row, Section, SettingsPage, Stepper } from '@/components/SettingsControls';
 import { MAX_ACCESS_MONTHS, MIN_ACCESS_MONTHS, formatAccessDate } from '@/lib/accessShared';
-import { isSteamApiKey, type DevProjectRow, type SteamKeyState } from '@/lib/devShared';
+import {
+  isRustMapsApiKey,
+  isSteamApiKey,
+  type ApiKeyState,
+  type DevProjectRow,
+  type SteamKeyState,
+} from '@/lib/devShared';
+import { PASSWORD_MIN, checkPassword } from '@/lib/authShared';
 import { APP_NAME } from '@/lib/brand';
 
 /**
@@ -172,6 +188,271 @@ function SteamKeyCard() {
       {typed.length > 0 && !canSave && (
         <div className="mt-2 text-[12px] text-text-dim">
           Ключ Steam — 32 символа: цифры и буквы A–F.
+        </div>
+      )}
+
+      <NoticeLine notice={notice} />
+    </div>
+  );
+}
+
+/**
+ * Ключ rustmaps.com. Живёт рядом со Steam и по тем же правилам: значение остаётся
+ * на сервере, наружу уходит только хвост. Без ключа раздел «Карта» показывает
+ * запасной рельеф, снятый плагином, а не настоящую карту вайпа.
+ */
+function RustMapsKeyCard() {
+  const [state, setState] = useState<ApiKeyState | null>(null);
+  const [key, setKey] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  useEffect(() => {
+    void (async () => {
+      try {
+        const res = await fetch('/api/dev/rustmaps', { cache: 'no-store' });
+        if (!res.ok) throw new Error(`rustmaps: ${res.status}`);
+        const body = (await res.json()) as { rustmaps: ApiKeyState };
+        setState(body.rustmaps);
+      } catch (err) {
+        console.error(err);
+        setNotice({ ok: false, text: 'Не удалось прочитать состояние ключа.' });
+      }
+    })();
+  }, []);
+
+  const save = async (value: string) => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch('/api/dev/rustmaps', {
+        method: 'PUT',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: value }),
+      });
+      const body = (await res.json()) as { rustmaps?: ApiKeyState; error?: string };
+      if (!res.ok || !body.rustmaps) {
+        setNotice({ ok: false, text: body.error ?? 'Не удалось сохранить.' });
+        return;
+      }
+      setState(body.rustmaps);
+      setKey('');
+      setSaved(true);
+      setTimeout(() => setSaved(false), 2000);
+    } catch (err) {
+      console.error(err);
+      setNotice({ ok: false, text: 'Панель не отвечает.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const check = async () => {
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch('/api/dev/rustmaps', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ key: key.trim() }),
+      });
+      const body = (await res.json()) as { error?: string };
+      setNotice(
+        res.ok
+          ? { ok: true, text: 'rustmaps ответил — ключ рабочий.' }
+          : { ok: false, text: body.error ?? 'Проверка не прошла.' },
+      );
+    } catch (err) {
+      console.error(err);
+      setNotice({ ok: false, text: 'Панель не отвечает.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const typed = key.trim();
+  const canSave = typed.length > 0 && isRustMapsApiKey(typed);
+  const canCheck = canSave || Boolean(state?.present);
+
+  return (
+    <div className="rounded-plate bg-surface px-4 py-3">
+      <div className="flex items-center gap-3">
+        <MapIcon size={15} className="shrink-0 text-text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px]">Ключ rustmaps API</div>
+          <div className="mt-0.5 text-[12px] text-text-dim">
+            {state === null
+              ? 'Читаем…'
+              : state.present
+                ? `Задан · оканчивается на ${state.hint}${state.fromEnv ? ' · из переменной RUSTMAPS_API_KEY' : ''}`
+                : 'Не задан — раздел «Карта» показывает запасной рельеф с сервера вместо карты вайпа'}
+          </div>
+        </div>
+        {busy && <Loader2 size={14} className="shrink-0 animate-spin text-text-muted" />}
+        {saved && !busy && (
+          <Check size={14} className="shrink-0" style={{ color: 'var(--success)' }} />
+        )}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          className="field min-w-[220px] flex-1 font-mono text-[12px]"
+          placeholder={state?.present ? 'Новый ключ' : 'Ключ из Dashboard → API keys на rustmaps.com'}
+          value={key}
+          disabled={state === null || busy}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => {
+            setKey(e.target.value);
+            setNotice(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && canSave) void save(typed);
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void save(typed)}
+          disabled={!canSave || busy}
+          className="btn-ghost shrink-0 px-3 py-2 text-[12px]"
+        >
+          <Check size={13} />
+          Сохранить
+        </button>
+        <button
+          type="button"
+          onClick={() => void check()}
+          disabled={!canCheck || busy}
+          className="btn-ghost shrink-0 px-3 py-2 text-[12px]"
+        >
+          <ShieldCheck size={13} />
+          Проверить
+        </button>
+        {state?.present && !state.fromEnv && (
+          <button
+            type="button"
+            onClick={() => void save('')}
+            disabled={busy}
+            className="btn-ghost shrink-0 px-3 py-2 text-[12px]"
+            style={{ color: 'var(--danger)' }}
+          >
+            Стереть
+          </button>
+        )}
+      </div>
+
+      {typed.length > 0 && !canSave && (
+        <div className="mt-2 text-[12px] text-text-dim">
+          Ключ rustmaps — строка без пробелов, от 16 символов.
+        </div>
+      )}
+
+      <NoticeLine notice={notice} />
+    </div>
+  );
+}
+
+/**
+ * Смена пароля по нику. Нужна, когда письмо со сбросом не доходит: пароль
+ * задаётся здесь и сразу, а прежние сессии учётки закрываются.
+ */
+function PasswordCard() {
+  const [nick, setNick] = useState('');
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<Notice>(null);
+
+  const invalid = password ? checkPassword(password) : null;
+  const canSend = nick.trim().length > 0 && password.length > 0 && !invalid;
+
+  const send = async () => {
+    if (!canSend || busy) return;
+    if (!window.confirm(`Заменить пароль учётки «${nick.trim()}»? Её сессии будут закрыты.`)) return;
+
+    setBusy(true);
+    setNotice(null);
+    try {
+      const res = await fetch('/api/dev/password', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ nick: nick.trim(), password }),
+      });
+      const body = (await res.json()) as { text?: string; error?: string };
+
+      if (!res.ok) {
+        setNotice({ ok: false, text: body.error ?? 'Не получилось.' });
+        return;
+      }
+
+      setNotice({ ok: true, text: body.text ?? 'Готово.' });
+      setPassword('');
+    } catch (err) {
+      console.error(err);
+      setNotice({ ok: false, text: 'Панель не отвечает.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="rounded-plate bg-surface px-4 py-3">
+      <div className="flex items-center gap-3">
+        <KeyRound size={15} className="shrink-0 text-text-muted" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[13px]">Сбросить пароль по нику</div>
+          <div className="mt-0.5 text-[12px] text-text-dim">
+            Логин или почта учётки и новый пароль. Он ставится сразу, письмо не отправляется,
+            а все прежние сессии этой учётки закрываются.
+          </div>
+        </div>
+        {busy && <Loader2 size={14} className="shrink-0 animate-spin text-text-muted" />}
+      </div>
+
+      <div className="mt-3 flex flex-wrap items-center gap-2">
+        <input
+          className="field min-w-[180px] flex-1 text-[12px]"
+          placeholder="ник или почта"
+          value={nick}
+          disabled={busy}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => {
+            setNick(e.target.value);
+            setNotice(null);
+          }}
+        />
+        <input
+          className="field min-w-[180px] flex-1 font-mono text-[12px]"
+          placeholder="новый пароль"
+          type="text"
+          value={password}
+          disabled={busy}
+          autoComplete="off"
+          spellCheck={false}
+          onChange={(e) => {
+            setPassword(e.target.value);
+            setNotice(null);
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') void send();
+          }}
+        />
+        <button
+          type="button"
+          onClick={() => void send()}
+          disabled={!canSend || busy}
+          className="btn-ghost shrink-0 px-3 py-2 text-[12px]"
+        >
+          <KeyRound size={13} />
+          Заменить
+        </button>
+      </div>
+
+      {invalid && <div className="mt-2 text-[12px] text-text-dim">{invalid}</div>}
+      {!invalid && !password && (
+        <div className="mt-2 text-[12px] text-text-dim">
+          От {PASSWORD_MIN} символов, буквы и цифры.
         </div>
       )}
 
@@ -415,6 +696,28 @@ export default function DevView({ login }: { login: string }) {
             </a>
           }
         />
+      </Section>
+
+      <Section title="rustmaps">
+        <RustMapsKeyCard />
+        <Row
+          label="Где взять ключ"
+          hint="rustmaps.com → Dashboard → API keys. По нему панель забирает карту вайпа по seed и размеру мира"
+          control={
+            <a
+              href="https://rustmaps.com/dashboard/api-keys"
+              target="_blank"
+              rel="noreferrer"
+              className="text-[12px] font-medium text-accent transition-colors hover:text-accent-hover"
+            >
+              Открыть
+            </a>
+          }
+        />
+      </Section>
+
+      <Section title="Учётные записи">
+        <PasswordCard />
       </Section>
 
       <Section title="Доступ к панели">

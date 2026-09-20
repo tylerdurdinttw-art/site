@@ -94,7 +94,12 @@ export default function PlayersTable({ players, loading, onSelect }: Props) {
               >
                 <td className="px-6 py-3">
                   <div className="flex items-center gap-3">
-                    <Avatar name={p.name} avatarUrl={p.avatarUrl} status={p.status} />
+                    <Avatar
+                      name={p.name}
+                      steamId={p.steamId}
+                      avatarUrl={p.avatarUrl}
+                      status={p.status}
+                    />
                     <div className="min-w-0">
                       <div className="truncate text-[14px] font-semibold">{p.name}</div>
                       <div className="text-[12px] text-text-muted">{STATUS_LABEL[p.status]}</div>

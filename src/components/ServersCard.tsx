@@ -5,7 +5,7 @@ import { ArrowLeftRight, FileCode2, Settings, Trash2, Users } from 'lucide-react
 import type { ServerRow } from '@/lib/overview';
 import { APP_VERSION } from '@/lib/version';
 
-const PLUGIN_FILE = 'YnaziCotTvBridge.cs';
+const PLUGIN_FILE = 'QuickPanelBridge.cs';
 
 interface Props {
   server: ServerRow;

@@ -1,11 +1,28 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Map as MapIcon, RefreshCw, ServerOff, TriangleAlert, Users } from 'lucide-react';
+import {
+  Map as MapIcon,
+  Minus,
+  Plus,
+  RefreshCw,
+  ServerOff,
+  TriangleAlert,
+  Users,
+} from 'lucide-react';
+import Avatar from '@/components/Avatar';
 
 const POSITIONS_POLL_MS = 3000;
 /** Пока rustmaps генерирует карту, перепроверяем не слишком часто. */
 const PENDING_RETRY_MS = 20_000;
+
+/**
+ * Масштаб карты: 1 — вся карта в окне раздела, дальше она растёт, а окно
+ * прокручивается. Шаг крупный намеренно — на карте ищут квадрат, а не пиксель.
+ */
+const ZOOM_MIN = 1;
+const ZOOM_MAX = 6;
+const ZOOM_STEP = 0.5;
 
 interface ServerOption {
   id: string;
@@ -71,6 +88,7 @@ export default function ServerMap() {
   const [map, setMap] = useState<MapData | null>(null);
   const [players, setPlayers] = useState<PlayerPosition[]>([]);
   const [loading, setLoading] = useState(true);
+  const [zoom, setZoom] = useState(ZOOM_MIN);
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -102,6 +120,8 @@ export default function ServerMap() {
   useEffect(() => {
     if (!serverId) return;
     setMap(null);
+    // Другой сервер — другая карта: держать чужой масштаб смысла нет.
+    setZoom(ZOOM_MIN);
     void loadMap(serverId);
   }, [serverId, loadMap]);
 
@@ -181,6 +201,12 @@ export default function ServerMap() {
     }));
   }, [players, worldSize]);
 
+  const zoomBy = (delta: number) =>
+    setZoom((value) => {
+      const next = Math.round((value + delta) * 100) / 100;
+      return Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, next));
+    });
+
   if (loading) return <div className="card h-[520px] animate-pulse" />;
 
   if (servers.length === 0) {
@@ -228,19 +254,54 @@ export default function ServerMap() {
           </div>
         </div>
 
-        {servers.length > 1 && (
-          <select
-            value={serverId ?? ''}
-            onChange={(e) => setServerId(e.target.value)}
-            className="h-10 rounded-control border border-border bg-surface-hover px-3 text-[13px] text-text"
-          >
-            {servers.map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name}
-              </option>
-            ))}
-          </select>
-        )}
+        <div className="flex items-center gap-2">
+          {/* Масштаб карты. Клик по проценту возвращает карту целиком в окно. */}
+          <div className="flex h-10 items-center gap-1 rounded-control border border-border bg-surface-hover px-1">
+            <button
+              type="button"
+              onClick={() => zoomBy(-ZOOM_STEP)}
+              disabled={zoom <= ZOOM_MIN}
+              title="Уменьшить карту"
+              aria-label="Уменьшить карту"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-raised hover:text-text disabled:opacity-35 disabled:hover:bg-transparent"
+            >
+              <Minus size={15} />
+            </button>
+            <button
+              type="button"
+              onClick={() => setZoom(ZOOM_MIN)}
+              title="Показать карту целиком"
+              aria-label="Показать карту целиком"
+              className="min-w-[46px] rounded-md px-1 text-center font-mono text-[12px] text-text-muted transition-colors hover:text-text"
+            >
+              {Math.round(zoom * 100)}%
+            </button>
+            <button
+              type="button"
+              onClick={() => zoomBy(ZOOM_STEP)}
+              disabled={zoom >= ZOOM_MAX}
+              title="Увеличить карту"
+              aria-label="Увеличить карту"
+              className="flex h-8 w-8 items-center justify-center rounded-md text-text-muted transition-colors hover:bg-surface-raised hover:text-text disabled:opacity-35 disabled:hover:bg-transparent"
+            >
+              <Plus size={15} />
+            </button>
+          </div>
+
+          {servers.length > 1 && (
+            <select
+              value={serverId ?? ''}
+              onChange={(e) => setServerId(e.target.value)}
+              className="h-10 rounded-control border border-border bg-surface-hover px-3 text-[13px] text-text"
+            >
+              {servers.map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+          )}
+        </div>
       </div>
 
       <div className="border-t border-border p-5">
@@ -263,45 +324,68 @@ export default function ServerMap() {
 
         {(map?.source === 'rustmaps' || map?.source === 'terrain') && (
           <div className="mx-auto w-full max-w-[720px]">
-            <div className="relative aspect-square w-full overflow-hidden rounded-control border border-border">
-              {map.source === 'rustmaps' ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={map.imageUrl}
-                  alt={`Карта ${current?.name ?? ''}`}
-                  className="absolute inset-0 h-full w-full object-cover"
-                />
-              ) : (
-                <canvas
-                  ref={canvasRef}
-                  className="absolute inset-0 h-full w-full"
-                  style={{ imageRendering: 'pixelated' }}
-                />
-              )}
+            {/*
+              Окно — квадрат по ширине карточки, карта внутри — квадрат шириной
+              zoom * 100%. На 100% всё видно целиком, как и раньше; увеличили —
+              окно начинает прокручиваться, а маркеры остаются на своих процентах
+              и потому никуда не уезжают.
+            */}
+            <div className="relative aspect-square w-full overflow-auto scrollbar-thin rounded-control border border-border">
+              <div
+                className="relative"
+                style={{ width: `${zoom * 100}%`, minWidth: '100%', aspectRatio: '1 / 1' }}
+              >
+                {map.source === 'rustmaps' ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={map.imageUrl}
+                    alt={`Карта ${current?.name ?? ''}`}
+                    className="absolute inset-0 h-full w-full object-cover"
+                  />
+                ) : (
+                  <canvas
+                    ref={canvasRef}
+                    className="absolute inset-0 h-full w-full"
+                    style={{ imageRendering: 'pixelated' }}
+                  />
+                )}
 
-              {markers.map((p) => (
-                <div
-                  key={p.steamId}
-                  className="absolute -translate-x-1/2 -translate-y-1/2"
-                  style={{ left: `${p.left}%`, top: `${p.top}%` }}
-                  title={`${p.name} — ${Math.round(p.x)}, ${Math.round(p.z)}`}
-                >
+                {/*
+                  На карте только аватарка: ники превращали скопление игроков в кашу.
+                  Имя и координаты показываются подсказкой при наведении.
+                */}
+                {markers.map((p) => (
                   <div
-                    className="flex h-9 w-9 items-center justify-center overflow-hidden rounded-full border-2 text-center"
-                    style={{
-                      borderColor: p.isAfk ? 'var(--warning)' : 'var(--accent)',
-                      backgroundColor: 'rgba(8,8,12,0.82)',
-                    }}
+                    key={p.steamId}
+                    className="group absolute z-0 -translate-x-1/2 -translate-y-1/2 hover:z-20"
+                    style={{ left: `${p.left}%`, top: `${p.top}%` }}
                   >
-                    <span className="px-0.5 text-[8px] font-semibold leading-none text-white">
-                      {p.name.length > 7 ? `${p.name.slice(0, 6)}…` : p.name}
-                    </span>
+                    <div
+                      className="rounded-full border-2 p-[1px] transition-transform group-hover:scale-110"
+                      style={{
+                        borderColor: p.isAfk ? 'var(--warning)' : 'var(--accent)',
+                        backgroundColor: 'rgba(8,8,12,0.82)',
+                      }}
+                    >
+                      <Avatar name={p.name} steamId={p.steamId} size={28} />
+                    </div>
+
+                    <div
+                      className="pointer-events-none absolute left-1/2 top-[calc(100%+4px)] hidden -translate-x-1/2 whitespace-nowrap rounded-plate px-2 py-1 text-[11px] font-medium text-white shadow-lg group-hover:block"
+                      style={{ backgroundColor: 'rgba(8,8,12,0.94)' }}
+                    >
+                      {p.name}
+                      <span className="ml-1.5 font-mono text-text-muted">
+                        {Math.round(p.x)}, {Math.round(p.z)}
+                      </span>
+                      {p.isAfk && <span className="ml-1.5 text-warning">АФК</span>}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
 
               {markers.length === 0 && (
-                <div className="absolute inset-x-0 bottom-3 text-center text-[11px] text-white/70">
+                <div className="pointer-events-none absolute inset-x-0 bottom-3 text-center text-[11px] text-white/70">
                   Сейчас на сервере никого нет
                 </div>
               )}

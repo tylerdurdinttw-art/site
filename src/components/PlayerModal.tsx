@@ -297,6 +297,7 @@ export default function PlayerModal({ steamId, onClose }: Props) {
           <div className="flex items-center gap-3">
             <Avatar
               name={data?.name ?? '?'}
+              steamId={steamId}
               avatarUrl={data?.avatarUrl}
               status={data?.status}
               size={44}
@@ -536,6 +537,7 @@ export default function PlayerModal({ steamId, onClose }: Props) {
                         <div key={mate.steamId} className="flex items-center gap-3 px-4 py-2.5">
                           <Avatar
                             name={mate.name}
+                            steamId={mate.steamId}
                             avatarUrl={mate.avatarUrl}
                             status={mate.status}
                             size={30}

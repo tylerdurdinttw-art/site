@@ -26,7 +26,7 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { SessionUser } from '@/lib/authShared';
-import type { ProjectState } from '@/lib/projectShared';
+import { canManageProject, type ProjectState } from '@/lib/projectShared';
 import { isDeveloper } from '@/lib/devShared';
 
 interface Item {
@@ -41,6 +41,11 @@ interface Item {
 interface Group {
   title: string;
   items: Item[];
+  /**
+   * Группа только для владельца и второго владельца. Обычный сотрудник её
+   * не видит, а страницы за ней ещё раз проверяют роль и уводят на «Игроков».
+   */
+  managerOnly?: boolean;
 }
 
 const START: Item = { label: 'Начало работы', icon: Rocket, color: '#f59e0b', href: '/start' };
@@ -59,6 +64,7 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Управление',
+    managerOnly: true,
     items: [
       { label: 'Серверы', icon: HardDrive, color: '#93a4c0', href: '/servers' },
       { label: 'Интеграции', icon: Plug, color: '#a78bfa', href: '/integrations' },
@@ -67,6 +73,7 @@ const GROUPS: Group[] = [
   },
   {
     title: 'Проект',
+    managerOnly: true,
     items: [
       { label: 'Общее', icon: Building2, color: '#93a4c0', href: '/general' },
       { label: 'Сотрудники', icon: UserSquare, color: '#93a4c0', href: '/staff' },
@@ -75,6 +82,12 @@ const GROUPS: Group[] = [
   },
 ];
 
+/** Единственный пункт, который остаётся всем, когда оплаченный срок кончился. */
+const RENEW_GROUP: Group = {
+  title: 'Проект',
+  items: [{ label: 'Продление', icon: CalendarClock, color: '#f59e0b', href: '/renew' }],
+};
+
 /**
  * Служебный раздел разработчиков сайта. В общий список не входит: его дописывает
  * groupsFor() тем логинам, что есть в DEVELOPER_LOGINS. Само по себе меню ничего
@@ -82,9 +95,21 @@ const GROUPS: Group[] = [
  */
 const DEV_ITEM: Item = { label: 'Разработка', icon: Code2, color: '#f472b6', href: '/dev' };
 
-function groupsFor(dev: boolean): Group[] {
-  if (!dev) return GROUPS;
-  return GROUPS.map((group) =>
+/**
+ * Что видно в меню.
+ *
+ * `manage` — владелец, второй владелец или разработчик сайта: только им открыты
+ * «Управление» и «Проект». Остальным остаётся «Модерация», а при закончившемся
+ * сроке — ещё и «Продление»: заплатить должно быть можно и без роли владельца.
+ */
+function groupsFor(dev: boolean, manage: boolean, expired: boolean): Group[] {
+  const visible = GROUPS.filter((group) => manage || !group.managerOnly);
+  const groups = manage ? visible : expired ? [...visible, RENEW_GROUP] : visible;
+
+  if (!dev) return groups;
+
+  // Разработчик проходит как управляющий, поэтому группа «Проект» тут точно есть.
+  return groups.map((group) =>
     group.title === 'Проект' ? { ...group, items: [...group.items, DEV_ITEM] } : group,
   );
 }
@@ -343,7 +368,8 @@ export default function Sidebar({
   // Разработчику дописывается «Разработка», и она остаётся живой даже с закрытым
   // доступом: срок продлевают как раз из неё.
   const dev = isDeveloper(user.login);
-  const groups = useMemo(() => groupsFor(dev), [dev]);
+  const manage = dev || canManageProject(project.staff, user.id);
+  const groups = useMemo(() => groupsFor(dev, manage, expired), [dev, manage, expired]);
   const searchable = useMemo(() => searchableFor(groups), [groups]);
   const isLocked = (href?: string) =>
     expired && href !== '/renew' && !(dev && href === DEV_ITEM.href);
@@ -389,7 +415,7 @@ export default function Sidebar({
 
   return (
     <aside
-      className={`flex h-screen shrink-0 flex-col border-r border-border bg-bg-sidebar transition-[width] duration-150 ${
+      className={`flex h-full shrink-0 flex-col border-r border-border bg-bg-sidebar transition-[width] duration-150 ${
         collapsed ? 'w-[64px]' : 'w-[248px]'
       }`}
     >

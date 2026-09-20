@@ -1,5 +1,5 @@
 import { prisma } from '@/lib/prisma';
-import { keyHint, type SteamKeyState } from '@/lib/devShared';
+import { keyHint, type ApiKeyState } from '@/lib/devShared';
 
 /**
  * Глобальные настройки сайта (таблица app_settings). Живут отдельно от настроек
@@ -8,6 +8,9 @@ import { keyHint, type SteamKeyState } from '@/lib/devShared';
 
 /** Ключ Steam Web API. Перекрывает переменную окружения STEAM_API_KEY. */
 export const STEAM_API_KEY_SETTING = 'steam_api_key';
+
+/** Ключ rustmaps.com. Перекрывает переменную окружения RUSTMAPS_API_KEY. */
+export const RUSTMAPS_API_KEY_SETTING = 'rustmaps_api_key';
 
 /**
  * Значения читаются на каждом запросе к Steam и в карточке игрока — держим их
@@ -57,10 +60,20 @@ export async function getSteamApiKey(): Promise<string> {
   return process.env.STEAM_API_KEY?.trim() ?? '';
 }
 
+/**
+ * Ключ rustmaps.com: сначала база, потом переменная окружения — тот же порядок,
+ * что и у Steam, чтобы ключ можно было поменять из панели без перезапуска сайта.
+ */
+export async function getRustMapsApiKey(): Promise<string> {
+  const stored = await getAppSetting(RUSTMAPS_API_KEY_SETTING);
+  if (stored) return stored;
+  return process.env.RUSTMAPS_API_KEY?.trim() ?? '';
+}
+
 /** Что показывать в разделе «Разработка»: сам ключ наружу не уходит. */
-export async function getSteamKeyState(): Promise<SteamKeyState> {
-  const stored = await getAppSetting(STEAM_API_KEY_SETTING);
-  const fromEnv = process.env.STEAM_API_KEY?.trim() ?? '';
+async function keyState(setting: string, envValue: string | undefined): Promise<ApiKeyState> {
+  const stored = await getAppSetting(setting);
+  const fromEnv = envValue?.trim() ?? '';
   const key = stored || fromEnv;
 
   return {
@@ -68,4 +81,12 @@ export async function getSteamKeyState(): Promise<SteamKeyState> {
     hint: key ? keyHint(key) : '',
     fromEnv: !stored && Boolean(fromEnv),
   };
+}
+
+export function getSteamKeyState(): Promise<ApiKeyState> {
+  return keyState(STEAM_API_KEY_SETTING, process.env.STEAM_API_KEY);
+}
+
+export function getRustMapsKeyState(): Promise<ApiKeyState> {
+  return keyState(RUSTMAPS_API_KEY_SETTING, process.env.RUSTMAPS_API_KEY);
 }

@@ -40,7 +40,7 @@ function Row({
 
   return (
     <div className="flex items-start gap-3 rounded-control px-3 py-2 transition-colors hover:bg-surface">
-      <Avatar name={message.name} size={30} />
+      <Avatar name={message.name} steamId={message.steamId} size={30} />
 
       <div className="min-w-0 flex-1">
         <div className="flex flex-wrap items-baseline gap-2">

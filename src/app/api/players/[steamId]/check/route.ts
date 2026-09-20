@@ -91,7 +91,16 @@ export async function POST(_req: Request, { params }: { params: { steamId: strin
     },
   });
 
-  await queueCommand(projectId, player.serverId, 'check', player.steamId, CHECK_INVITE_MESSAGE);
+  // Логин сотрудника едет вместе с командой: им плагин подписывает сообщение
+  // «начата проверка» в канале репортов Discord.
+  await queueCommand(
+    projectId,
+    player.serverId,
+    'check',
+    player.steamId,
+    CHECK_INVITE_MESSAGE,
+    ctx.user.login,
+  );
 
   // «Оповещение о начале проверки игрока в чате» — видит весь сервер.
   if (settings.checks.announceStart) {

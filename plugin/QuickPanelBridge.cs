@@ -15,9 +15,9 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("YnaziCotTvBridge", "YnaziCotTV", "1.5.0")]
-    [Description("Мост между игровым сервером Rust и веб-панелью YnaziCotTV: heartbeat, события, античит-статистика")]
-    public class YnaziCotTvBridge : RustPlugin
+    [Info("QuickPanelBridge", "QuickPanel", "1.6.0")]
+    [Description("Мост между игровым сервером Rust и веб-панелью QuickPanel: heartbeat, события, античит-статистика")]
+    public class QuickPanelBridge : RustPlugin
     {
         #region Конфиг
 
@@ -65,6 +65,8 @@ namespace Oxide.Plugins
             [JsonProperty("NotifyBans")] public bool NotifyBans { get; set; } = true;
             [JsonProperty("NotifyUnbans")] public bool NotifyUnbans { get; set; } = true;
             [JsonProperty("NotifyReports")] public bool NotifyReports { get; set; } = true;
+            /// Слать ли в канал репортов сообщение о том, что сотрудник начал проверку.
+            [JsonProperty("NotifyChecks")] public bool NotifyChecks { get; set; } = true;
             /// Как подписывать сервер в сообщении. Пусто — берётся hostname сервера.
             [JsonProperty("ServerName")] public string ServerName { get; set; } = "";
             /// С какой по счёту жалобы на игрока к сообщению приписывается @everyone.
@@ -85,9 +87,9 @@ namespace Oxide.Plugins
         private class PluginConfig
         {
             // Адрес панели. Если она развёрнута не на localhost — поправьте здесь один раз
-            // либо передайте адрес первым аргументом: ynazicottv.setup <адрес> <код>.
+            // либо передайте адрес первым аргументом: quickpanel.setup <адрес> <код>.
             [JsonProperty("ApiUrl")] public string ApiUrl { get; set; } = "http://localhost:3000";
-            // ServerId/ServerKey/ServerSecret заполняет команда ynazicottv.setup — руками их трогать не нужно.
+            // ServerId/ServerKey/ServerSecret заполняет команда quickpanel.setup — руками их трогать не нужно.
             [JsonProperty("ServerId")] public string ServerId { get; set; } = "";
             [JsonProperty("ServerKey")] public string ServerKey { get; set; } = "";
             [JsonProperty("ServerSecret")] public string ServerSecret { get; set; } = "";
@@ -140,7 +142,7 @@ namespace Oxide.Plugins
 
         #region Состояние
 
-        private const string PermAdmin = "ynazicottv.admin";
+        private const string PermAdmin = "quickpanel.admin";
 
         // Константы очереди отправки
         private const int MaxQueueSize = 500;
@@ -151,7 +153,7 @@ namespace Oxide.Plugins
         private const float ViolationDebounceSec = 10f;
 
         // Имя CUI-слоя с баннером вызова на проверку
-        private const string CheckBannerPanel = "ynazicottv.check.banner";
+        private const string CheckBannerPanel = "quickpanel.check.banner";
 
         // Текст баннера — это оформление, поэтому живёт в плагине: панель только просит
         // его показать и может прислать свой заголовок. Разметку <color=…> Rust понимает.
@@ -280,9 +282,16 @@ namespace Oxide.Plugins
             var reportCommand = (_config.Reports.Command ?? "").Trim().TrimStart('/');
             if (string.IsNullOrEmpty(reportCommand)) reportCommand = "report";
             cmd.AddChatCommand(reportCommand, this, nameof(CmdReport));
+
+            // Панель раньше называлась иначе, и старые инструкции всё ещё ходят по рукам.
+            // Прежние имена команд оставлены алиасами, чтобы `ynazicottv.setup` не падал
+            // с «command not found» у тех, кто подключает сервер по старой памятке.
+            cmd.AddConsoleCommand("ynazicottv.setup", this, nameof(CmdSetup));
+            cmd.AddConsoleCommand("ynazicottv.status", this, nameof(CmdConsoleStatus));
+            cmd.AddConsoleCommand("ynazicottv.discordtest", this, nameof(CmdConsoleDiscordTest));
         }
 
-        /// Плагин настроен, если панель выдала ключи — обычно через ynazicottv.setup.
+        /// Плагин настроен, если панель выдала ключи — обычно через quickpanel.setup.
         private bool IsConfigured =>
             !string.IsNullOrEmpty(_config.ApiUrl) &&
             !string.IsNullOrEmpty(_config.ServerId) &&
@@ -302,7 +311,7 @@ namespace Oxide.Plugins
                 PrintWarning(
                     "Сервер ещё не подключён к панели.\n" +
                     "Откройте панель -> Главная -> Подключить сервер, скопируйте команду и выполните её здесь.\n" +
-                    "Формат: ynazicottv.setup <код>");
+                    "Формат: quickpanel.setup <код>");
                 return;
             }
 
@@ -785,12 +794,12 @@ namespace Oxide.Plugins
         // с отступом 8, шапка и поиск над ней, стрелки страниц под ней. Размеры заданы
         // в пикселях, а не в долях экрана, потому что канвас Rust всегда масштабируется
         // к одному разрешению — так меню выглядит одинаково и на 1080p, и на ультравайде.
-        private const string ReportPanel = "ynazicottv.report";
-        private const string ReportRoot = "ynazicottv.report.grid";
-        private const string ReportHead = "ynazicottv.report.head";
-        private const string ReportSearch = "ynazicottv.report.search";
-        private const string ReportPopup = "ynazicottv.report.popup";
-        private const string ReportMessage = "ynazicottv.report.msg";
+        private const string ReportPanel = "quickpanel.report";
+        private const string ReportRoot = "quickpanel.report.grid";
+        private const string ReportHead = "quickpanel.report.head";
+        private const string ReportSearch = "quickpanel.report.search";
+        private const string ReportPopup = "quickpanel.report.popup";
+        private const string ReportMessage = "quickpanel.report.msg";
 
         private const int ReportColumns = 6;
         private const int ReportRows = 3;
@@ -859,7 +868,7 @@ namespace Oxide.Plugins
             DrawReportUi(player);
         }
 
-        [ConsoleCommand("ynazicottv.report.page")]
+        [ConsoleCommand("quickpanel.report.page")]
         private void CmdReportPage(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -875,7 +884,7 @@ namespace Oxide.Plugins
         }
 
         /// Текст приходит от поля ввода при нажатии Enter или при потере фокуса.
-        [ConsoleCommand("ynazicottv.report.search")]
+        [ConsoleCommand("quickpanel.report.search")]
         private void CmdReportSearch(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -894,7 +903,7 @@ namespace Oxide.Plugins
             DrawReportUi(player);
         }
 
-        [ConsoleCommand("ynazicottv.report.select")]
+        [ConsoleCommand("quickpanel.report.select")]
         private void CmdReportSelect(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -931,7 +940,7 @@ namespace Oxide.Plugins
         }
 
         /// Причина и есть кнопка отправки: выбрал — репорт ушёл.
-        [ConsoleCommand("ynazicottv.report.reason")]
+        [ConsoleCommand("quickpanel.report.reason")]
         private void CmdReportReason(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -947,7 +956,7 @@ namespace Oxide.Plugins
             SubmitReport(player, state);
         }
 
-        [ConsoleCommand("ynazicottv.report.message")]
+        [ConsoleCommand("quickpanel.report.message")]
         private void CmdReportMessage(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -964,7 +973,7 @@ namespace Oxide.Plugins
             DrawReportUi(player);
         }
 
-        [ConsoleCommand("ynazicottv.report.back")]
+        [ConsoleCommand("quickpanel.report.back")]
         private void CmdReportBack(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -976,7 +985,7 @@ namespace Oxide.Plugins
             DrawReportUi(player);
         }
 
-        [ConsoleCommand("ynazicottv.report.close")]
+        [ConsoleCommand("quickpanel.report.close")]
         private void CmdReportClose(ConsoleSystem.Arg arg)
         {
             var player = arg.Player();
@@ -1108,7 +1117,7 @@ namespace Oxide.Plugins
                 {
                     Color = "0.20 0.20 0.20 1.00",
                     Sprite = "assets/content/ui/ui.background.transparent.radial.psd",
-                    Command = "ynazicottv.report.close"
+                    Command = "quickpanel.report.close"
                 },
                 RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "0 0", OffsetMax = "0 0" },
                 Text = { Text = "" }
@@ -1217,7 +1226,7 @@ namespace Oxide.Plugins
                         Align = TextAnchor.MiddleLeft,
                         Color = Accent,
                         CharsLimit = 32,
-                        Command = "ynazicottv.report.search"
+                        Command = "quickpanel.report.search"
                     },
                     Rect("0 0", "1 1", 10, 0, -85, 0)
                 }
@@ -1230,7 +1239,7 @@ namespace Oxide.Plugins
                 {
                     Color = Accent,
                     Material = "assets/icons/greyout.mat",
-                    Command = "ynazicottv.report.page 0"
+                    Command = "quickpanel.report.page 0"
                 },
                 RectTransform =
                 {
@@ -1255,7 +1264,7 @@ namespace Oxide.Plugins
                 Button =
                 {
                     Color = hasPrev ? AccentFaint : PanelBg,
-                    Command = "ynazicottv.report.page " + Math.Max(0, page - 1)
+                    Command = "quickpanel.report.page " + Math.Max(0, page - 1)
                 },
                 RectTransform =
                 {
@@ -1274,7 +1283,7 @@ namespace Oxide.Plugins
                 Button =
                 {
                     Color = hasNext ? AccentFaint : PanelBg,
-                    Command = "ynazicottv.report.page " + Math.Min(pages - 1, page + 1)
+                    Command = "quickpanel.report.page " + Math.Min(pages - 1, page + 1)
                 },
                 RectTransform =
                 {
@@ -1332,7 +1341,7 @@ namespace Oxide.Plugins
                 Button =
                 {
                     Color = "0 0 0 0",
-                    Command = "ynazicottv.report.select " + target.SteamId + " " + slot
+                    Command = "quickpanel.report.select " + target.SteamId + " " + slot
                 },
                 RectTransform = { AnchorMin = "0 0", AnchorMax = "1 1", OffsetMin = "0 0", OffsetMax = "0 0" },
                 Text = { Text = "" }
@@ -1368,7 +1377,7 @@ namespace Oxide.Plugins
                 {
                     Color = "0 0 0 1",
                     Sprite = "assets/content/ui/gameui/attackheli/compass/ui.soft.radial.png",
-                    Command = "ynazicottv.report.back"
+                    Command = "quickpanel.report.back"
                 },
                 RectTransform =
                 {
@@ -1384,7 +1393,7 @@ namespace Oxide.Plugins
                 {
                     Color = "0.204 0.204 0.204",
                     Sprite = "assets/content/ui/gameui/attackheli/compass/ui.soft.radial.png",
-                    Command = "ynazicottv.report.back"
+                    Command = "quickpanel.report.back"
                 },
                 RectTransform =
                 {
@@ -1400,7 +1409,7 @@ namespace Oxide.Plugins
                 {
                     Color = "0 0 0 0.5",
                     Material = "assets/content/ui/uibackgroundblur-ingamemenu.mat",
-                    Command = "ynazicottv.report.back"
+                    Command = "quickpanel.report.back"
                 },
                 RectTransform =
                 {
@@ -1433,7 +1442,7 @@ namespace Oxide.Plugins
 
                 container.Add(new CuiButton
                 {
-                    Button = { Color = AccentFaint, Command = "ynazicottv.report.reason " + i },
+                    Button = { Color = AccentFaint, Command = "quickpanel.report.reason " + i },
                     RectTransform =
                     {
                         AnchorMin = side, AnchorMax = side,
@@ -1480,7 +1489,7 @@ namespace Oxide.Plugins
                         Align = TextAnchor.MiddleLeft,
                         Color = Accent,
                         CharsLimit = MaxReportMessage,
-                        Command = "ynazicottv.report.message"
+                        Command = "quickpanel.report.message"
                     },
                     Rect("0 0", "1 1", 10, 0, -10, 0)
                 }
@@ -1727,7 +1736,7 @@ namespace Oxide.Plugins
         {
             // webrequest передаёт тело строкой, поэтому бинарник кладём в multipart-часть
             // с Content-Transfer-Encoding: base64 — так он переживает строковую передачу.
-            var boundary = "----ynazicottv" + Guid.NewGuid().ToString("N");
+            var boundary = "----quickpanel" + Guid.NewGuid().ToString("N");
             var sb = new StringBuilder();
 
             sb.Append("--").Append(boundary).Append("\r\n");
@@ -1986,6 +1995,8 @@ namespace Oxide.Plugins
                     ["isAfk"] = IsAfk(player),
                     // По размеру команды панель показывает режим игры: соло/дуо/трио/сквад/клан.
                     ["teamSize"] = GetTeamSize(player),
+                    // По teamId панель собирает состав команды: одинаковый id — одна тима.
+                    ["teamId"] = GetTeamId(player),
                     ["language"] = GetLanguage(player),
                     ["ownerSteamId"] = info.OwnerId == 0UL ? player.UserIDString : info.OwnerId.ToString(),
                     ["familyShare"] = info.FamilyShare,
@@ -2204,7 +2215,7 @@ namespace Oxide.Plugins
             // Реплика панели адресована всему серверу, у остальных команд есть игрок.
             if (command.Type != "say" && string.IsNullOrEmpty(command.SteamId)) return;
 
-            var reason = string.IsNullOrEmpty(command.Reason) ? "YnaziCotTV" : command.Reason;
+            var reason = string.IsNullOrEmpty(command.Reason) ? "QuickPanel" : command.Reason;
 
             switch (command.Type)
             {
@@ -2232,6 +2243,8 @@ namespace Oxide.Plugins
                     // Игрока не кикаем и не баним — только показываем предупреждение на экране.
                     StartCheck(command.SteamId);
                     ShowCheckWarning(command.SteamId, reason);
+                    // В канал репортов: жалобы и проверки по ним разбирают одни и те же люди.
+                    AnnounceCheckStart(command.SteamId, command.Admin);
                     break;
                 case "check_banner":
                     StartCheck(command.SteamId);
@@ -2409,6 +2422,57 @@ namespace Oxide.Plugins
             _banners.Clear();
         }
 
+        /// Сообщение в канал репортов: сотрудник вызвал игрока на проверку.
+        /// Канал тот же, что у жалоб, — проверка обычно и начинается с них,
+        /// и держать её в отдельном месте неудобно.
+        private void AnnounceCheckStart(string steamId, string admin)
+        {
+            if (!_config.Discord.NotifyChecks) return;
+
+            var webhook = _config.Discord.ReportsWebhook;
+            if (string.IsNullOrEmpty(webhook)) return;
+
+            var player = FindConnected(steamId);
+            var shownName = player != null ? player.displayName : steamId;
+
+            // Ник ведёт в карточку игрока в панели — оттуда проверку и ведут.
+            var profile = PanelPlayerUrl(steamId) ?? SteamProfileUrl(steamId);
+            var target = profile == null
+                ? "**" + EscapeMarkdown(Trim(shownName, 64)) + "**"
+                : "[" + EscapeMarkdown(Trim(shownName, 64)) + "](" + profile + ")";
+
+            var author = string.IsNullOrEmpty(admin) ? "Панель" : admin;
+
+            var fields = new List<object>
+            {
+                DiscordField("SteamID", IsSteamId(steamId)
+                    ? "[" + steamId + "](" + SteamProfileUrl(steamId) + ")"
+                    : steamId, true),
+                DiscordField("Сотрудник", author, true)
+            };
+
+            FetchSteamAvatar(steamId, avatar =>
+            {
+                var embed = new Dictionary<string, object>
+                {
+                    ["author"] = new Dictionary<string, object> { ["name"] = Trim(author, 256) },
+                    ["description"] = "Начата проверка игрока " + target,
+                    ["color"] = ColorCheck,
+                    ["fields"] = fields,
+                    ["footer"] = new Dictionary<string, object>
+                    {
+                        ["text"] = Trim(DiscordServerName(), 2048)
+                    },
+                    ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
+                };
+
+                if (!string.IsNullOrEmpty(avatar))
+                    embed["thumbnail"] = new Dictionary<string, object> { ["url"] = avatar };
+
+                PostToDiscord(webhook, embed, null);
+            });
+        }
+
         /// Личное сообщение от панели: видит только этот игрок.
         private void SendCheckMessage(string steamId, string text)
         {
@@ -2543,12 +2607,12 @@ namespace Oxide.Plugins
 
         #region Подключение к панели
 
-        /// Единственный шаг настройки: `ynazicottv.setup <код>`.
+        /// Единственный шаг настройки: `quickpanel.setup <код>`.
         /// Адрес панели берётся из конфига (ApiUrl); если она развёрнута по другому адресу,
-        /// его можно передать первым аргументом: `ynazicottv.setup <адрес> <код>`.
+        /// его можно передать первым аргументом: `quickpanel.setup <адрес> <код>`.
         /// Код одноразовый, панель показывает его в разделе «Подключить сервер».
         /// В ответ приходят serverId/serverKey/serverSecret — плагин сам пишет их в конфиг.
-        [ConsoleCommand("ynazicottv.setup")]
+        [ConsoleCommand("quickpanel.setup")]
         private void CmdSetup(ConsoleSystem.Arg arg)
         {
             // Только серверная консоль и владелец: у игроков authLevel < 2.
@@ -2563,8 +2627,8 @@ namespace Oxide.Plugins
             if (!arg.HasArgs(1))
             {
                 arg.ReplyWith(
-                    "Использование: ynazicottv.setup <код>\n" +
-                    "Если панель развёрнута не по адресу из конфига: ynazicottv.setup <адрес> <код>");
+                    "Использование: quickpanel.setup <код>\n" +
+                    "Если панель развёрнута не по адресу из конфига: quickpanel.setup <адрес> <код>");
                 return;
             }
 
@@ -2583,14 +2647,14 @@ namespace Oxide.Plugins
                 code = (arg.GetString(0) ?? "").Trim();
                 if (string.IsNullOrEmpty(apiUrl))
                 {
-                    arg.ReplyWith("Адрес панели не задан. Формат: ynazicottv.setup <адрес> <код>");
+                    arg.ReplyWith("Адрес панели не задан. Формат: quickpanel.setup <адрес> <код>");
                     return;
                 }
             }
 
             if (string.IsNullOrEmpty(code))
             {
-                arg.ReplyWith("Не передан код подключения. Формат: ynazicottv.setup <код>");
+                arg.ReplyWith("Не передан код подключения. Формат: quickpanel.setup <код>");
                 return;
             }
 
@@ -2612,7 +2676,7 @@ namespace Oxide.Plugins
             var headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" };
 
             var url = apiUrl + "/api/pair";
-            arg.ReplyWith("YnaziCotTV: подключаюсь к " + url + " ...");
+            arg.ReplyWith("QuickPanel: подключаюсь к " + url + " ...");
 
             webrequest.Enqueue(url, body, (respCode, response) =>
             {
@@ -2658,7 +2722,7 @@ namespace Oxide.Plugins
         }
 
         /// Состояние подключения прямо из консоли, без входа в игру.
-        [ConsoleCommand("ynazicottv.status")]
+        [ConsoleCommand("quickpanel.status")]
         private void CmdConsoleStatus(ConsoleSystem.Arg arg)
         {
             if (arg.Connection != null && arg.Connection.authLevel < 2)
@@ -2673,7 +2737,7 @@ namespace Oxide.Plugins
         /// Проверка вебхуков: показывает, что реально лежит в конфиге у работающего
         /// плагина, и шлёт тестовое сообщение. Без неё «репорт не дошёл» неотличимо
         /// от «вебхук пуст»: пустой адрес отправка пропускает молча.
-        [ConsoleCommand("ynazicottv.discordtest")]
+        [ConsoleCommand("quickpanel.discordtest")]
         private void CmdConsoleDiscordTest(ConsoleSystem.Arg arg)
         {
             if (arg.Connection != null && arg.Connection.authLevel < 2)
@@ -2693,13 +2757,14 @@ namespace Oxide.Plugins
                 "  ReportsWebhook: " + DescribeWebhook(discord.ReportsWebhook) + "\n" +
                 "  NotifyBans: " + discord.NotifyBans +
                 ", NotifyUnbans: " + discord.NotifyUnbans +
-                ", NotifyReports: " + discord.NotifyReports + "\n" +
+                ", NotifyReports: " + discord.NotifyReports +
+                ", NotifyChecks: " + discord.NotifyChecks + "\n" +
                 "  ServerName: " + DiscordServerName());
 
             if (string.IsNullOrEmpty(url))
             {
                 arg.ReplyWith("Адрес пуст — слать некуда. Впишите его в конфиг и перезагрузите плагин: "
-                              + "oxide.reload YnaziCotTvBridge");
+                              + "oxide.reload QuickPanelBridge");
                 return;
             }
 
@@ -2776,11 +2841,11 @@ namespace Oxide.Plugins
         private string StatusText()
         {
             if (!IsConfigured)
-                return "YnaziCotTV: сервер не подключён.\n" +
-                       "Выполните: ynazicottv.setup <код>";
+                return "QuickPanel: сервер не подключён.\n" +
+                       "Выполните: quickpanel.setup <код>";
 
             var since = (int)(DateTime.UtcNow - _lastSuccessAt).TotalSeconds;
-            return "YnaziCotTV\n" +
+            return "QuickPanel\n" +
                    "Панель: " + _config.ApiUrl + "\n" +
                    "Сервер: " + _config.ServerId + "\n" +
                    "Очередь: " + _queue.Count + " / " + MaxQueueSize + "\n" +
@@ -2792,7 +2857,7 @@ namespace Oxide.Plugins
         #region Чат-команды
 
         [ChatCommand("panel")]
-        private void CmdYnaziCotTV(BasePlayer player, string command, string[] args)
+        private void CmdQuickPanel(BasePlayer player, string command, string[] args)
         {
             if (player == null) return;
 
@@ -2975,6 +3040,8 @@ namespace Oxide.Plugins
         private const int ColorBan = 0xef4444;
         private const int ColorReport = 0xef4444;
         private const int ColorUnban = 0x22c55e;
+        // Начатая проверка — синяя: это ещё не наказание, а вызов на разговор.
+        private const int ColorCheck = 0x3b82f6;
 
         /// Сколько держим отметку «это пришло командой из панели» — дольше, чем идёт
         /// путь «команда → banid → OnUserBanned», но достаточно коротко, чтобы
@@ -3207,7 +3274,7 @@ namespace Oxide.Plugins
                 ["title"] = title,
                 ["color"] = color,
                 ["fields"] = fields,
-                ["footer"] = new Dictionary<string, object> { ["text"] = "YnaziCotTV" },
+                ["footer"] = new Dictionary<string, object> { ["text"] = "QuickPanel" },
                 ["timestamp"] = DateTime.UtcNow.ToString("o", CultureInfo.InvariantCulture)
             }, null, onDone);
         }
@@ -3229,7 +3296,7 @@ namespace Oxide.Plugins
 
             var payload = new Dictionary<string, object>
             {
-                ["username"] = "YnaziCotTV",
+                ["username"] = "QuickPanel",
                 ["embeds"] = new List<object> { embed }
             };
 
@@ -3300,6 +3367,21 @@ namespace Oxide.Plugins
             catch
             {
                 return 0;
+            }
+        }
+
+        /// Идентификатор команды из RelationshipManager. "0" — игрок вне команды.
+        /// Панель по нему собирает вкладку «Команда»: состав — это все игроки
+        /// сервера с тем же id, и он переживает перезагрузку плагина.
+        private static string GetTeamId(BasePlayer player)
+        {
+            try
+            {
+                return player.currentTeam.ToString();
+            }
+            catch
+            {
+                return "0";
             }
         }
 

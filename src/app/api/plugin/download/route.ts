@@ -6,7 +6,7 @@ import { requireApiUser } from '@/lib/apiAuth';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const PLUGIN_PATH = path.join(process.cwd(), 'plugin', 'YnaziCotTvBridge.cs');
+const PLUGIN_PATH = path.join(process.cwd(), 'plugin', 'QuickPanelBridge.cs');
 
 /** Отдаёт исходник плагина из plugin/ — единственный источник, копии в public нет. */
 export async function GET() {
@@ -19,7 +19,7 @@ export async function GET() {
     return new NextResponse(source, {
       headers: {
         'content-type': 'text/plain; charset=utf-8',
-        'content-disposition': 'attachment; filename="YnaziCotTvBridge.cs"',
+        'content-disposition': 'attachment; filename="QuickPanelBridge.cs"',
         'cache-control': 'no-store',
       },
     });

@@ -1,11 +1,29 @@
 'use client';
 
 import { useCallback, useState } from 'react';
-import { Check, Copy, Loader2, Plus, ShieldCheck, Trash2 } from 'lucide-react';
+import { Check, Copy, Crown, Loader2, Plus, ShieldCheck, Trash2 } from 'lucide-react';
 import PageTopBar from '@/components/PageTopBar';
 import { copyText } from '@/lib/clipboard';
 import { PERMISSIONS } from '@/lib/permissions';
-import { isOwner, membersOnly, type StaffRow } from '@/lib/projectShared';
+import {
+  COOWNER_ROLE,
+  isCoOwner,
+  isOwner,
+  membersOnly,
+  type StaffRow,
+} from '@/lib/projectShared';
+
+/** Плашка роли: у владельца и второго владельца она своя, у остальных её нет. */
+function RoleBadge({ label, color }: { label: string; color: string }) {
+  return (
+    <span
+      className="shrink-0 rounded-plate px-1.5 py-0.5 text-[11px] font-medium"
+      style={{ backgroundColor: `${color}29`, color }}
+    >
+      {label}
+    </span>
+  );
+}
 
 /**
  * Карточка владельца. Прав у него полный набор, и он тут только для справки:
@@ -21,12 +39,7 @@ function OwnerCard({ owner }: { owner: StaffRow }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <span className="truncate text-[13px] font-semibold">{owner.name}</span>
-            <span
-              className="shrink-0 rounded-plate px-1.5 py-0.5 text-[11px] font-medium"
-              style={{ backgroundColor: 'rgba(245,158,11,0.16)', color: '#f59e0b' }}
-            >
-              Владелец
-            </span>
+            <RoleBadge label="Владелец" color="#f59e0b" />
           </div>
           <div className="truncate text-[12px] text-text-muted">
             {owner.contact || 'создатель проекта'} · полный доступ ко всем разделам
@@ -38,7 +51,16 @@ function OwnerCard({ owner }: { owner: StaffRow }) {
   );
 }
 
-export default function StaffView({ initialStaff }: { initialStaff: StaffRow[] }) {
+interface Props {
+  initialStaff: StaffRow[];
+  /**
+   * Может ли смотрящий назначать второго владельца. Так умеет только создатель
+   * проекта (и разработчик сайта) — второй владелец передать роль дальше не может.
+   */
+  canAssignCoOwner: boolean;
+}
+
+export default function StaffView({ initialStaff, canAssignCoOwner }: Props) {
   const [staff, setStaff] = useState(initialStaff);
   const owner = staff.find(isOwner) ?? null;
   const members = membersOnly(staff);
@@ -89,12 +111,50 @@ export default function StaffView({ initialStaff }: { initialStaff: StaffRow[] }
       : [...member.permissions, key];
 
     setSaving(member.id);
+    setError(null);
     try {
-      await fetch(`/api/staff/${member.id}`, {
+      const res = await fetch(`/api/staff/${member.id}`, {
         method: 'PATCH',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ permissions: next }),
       });
+      if (!res.ok) {
+        const body = (await res.json()) as { error?: string };
+        setError(body.error ?? 'Не удалось сохранить права.');
+      }
+      await reload();
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  /**
+   * Второй владелец в проекте один: назначение нового снимает роль с прежнего —
+   * это делает сам эндпоинт, здесь достаточно отправить нужную роль.
+   */
+  const toggleCoOwner = async (member: StaffRow) => {
+    const next = isCoOwner(member) ? 'moderator' : COOWNER_ROLE;
+    if (
+      next === COOWNER_ROLE &&
+      !window.confirm(
+        `Назначить «${member.name}» вторым владельцем? Ему откроются разделы «Управление» и «Проект».`,
+      )
+    ) {
+      return;
+    }
+
+    setSaving(member.id);
+    setError(null);
+    try {
+      const res = await fetch(`/api/staff/${member.id}`, {
+        method: 'PATCH',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ role: next }),
+      });
+      if (!res.ok) {
+        const body = (await res.json()) as { error?: string };
+        setError(body.error ?? 'Не удалось изменить роль.');
+      }
       await reload();
     } finally {
       setSaving(null);
@@ -160,76 +220,112 @@ export default function StaffView({ initialStaff }: { initialStaff: StaffRow[] }
             </div>
           )}
 
-          {members.map((member) => (
-            <div key={member.id} className="rounded-control border border-border bg-surface p-4">
-              <div className="flex items-center gap-3">
-                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-hover text-[12px] font-semibold text-text-muted">
-                  {member.name.slice(0, 1).toUpperCase()}
-                </span>
-                <div className="min-w-0 flex-1">
-                  <div className="truncate text-[13px] font-semibold">{member.name}</div>
-                  <div className="truncate text-[12px] text-text-muted">
-                    {member.contact || 'контакт не указан'} ·{' '}
-                    {member.acceptedAt ? 'принял приглашение' : 'приглашён'}
+          {members.map((member) => {
+            const coOwner = isCoOwner(member);
+
+            return (
+              <div key={member.id} className="rounded-control border border-border bg-surface p-4">
+                <div className="flex items-center gap-3">
+                  <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-surface-hover text-[12px] font-semibold text-text-muted">
+                    {member.name.slice(0, 1).toUpperCase()}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="truncate text-[13px] font-semibold">{member.name}</span>
+                      {coOwner && <RoleBadge label="Второй владелец" color="#a78bfa" />}
+                    </div>
+                    <div className="truncate text-[12px] text-text-muted">
+                      {member.contact || 'контакт не указан'} ·{' '}
+                      {member.acceptedAt ? 'принял приглашение' : 'приглашён'}
+                    </div>
                   </div>
+
+                  {saving === member.id && (
+                    <Loader2 size={14} className="shrink-0 animate-spin text-text-muted" />
+                  )}
+
+                  {canAssignCoOwner && (
+                    <button
+                      type="button"
+                      onClick={() => void toggleCoOwner(member)}
+                      // Роль привязана к учётке, а её у непринятого приглашения ещё нет —
+                      // на этот же признак смотрит и эндпоинт.
+                      disabled={!member.userId || saving === member.id}
+                      title={
+                        member.userId
+                          ? coOwner
+                            ? 'Снять роль второго владельца'
+                            : 'Назначить вторым владельцем'
+                          : 'Сначала он должен принять приглашение'
+                      }
+                      className="btn-ghost shrink-0 px-3 py-1.5 text-[12px] disabled:opacity-40"
+                      style={coOwner ? { color: '#a78bfa' } : undefined}
+                    >
+                      <Crown size={13} />
+                      {coOwner ? 'Снять' : 'Владелец'}
+                    </button>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={() => void copyInvite(member)}
+                    className="btn-ghost shrink-0 px-3 py-1.5 text-[12px]"
+                  >
+                    {copiedId === member.id ? <Check size={13} /> : <Copy size={13} />}
+                    Ссылка
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => void remove(member.id)}
+                    aria-label={`Убрать ${member.name}`}
+                    className="shrink-0 text-text-muted transition-colors hover:text-[color:var(--danger)]"
+                  >
+                    <Trash2 size={15} />
+                  </button>
                 </div>
 
-                {saving === member.id && (
-                  <Loader2 size={14} className="shrink-0 animate-spin text-text-muted" />
+                {coOwner ? (
+                  <div className="mt-3 rounded-control border border-border bg-surface-hover px-3 py-2 text-[12px] text-text-muted">
+                    Полный доступ ко всем разделам, включая «Управление» и «Проект». Права по
+                    отдельности у второго владельца не настраиваются.
+                  </div>
+                ) : (
+                  <div className="mt-3 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                    {PERMISSIONS.map((permission) => {
+                      const on = member.permissions.includes(permission.key);
+                      return (
+                        <label
+                          key={permission.key}
+                          title={permission.hint}
+                          className={`flex cursor-pointer items-center gap-2.5 rounded-control border px-3 py-2 text-[13px] transition-colors ${
+                            on
+                              ? 'border-[color:var(--accent)] bg-[rgba(59,130,246,0.1)]'
+                              : 'border-border bg-surface-hover hover:bg-surface-raised'
+                          }`}
+                        >
+                          <input
+                            type="checkbox"
+                            checked={on}
+                            onChange={() => void togglePermission(member, permission.key)}
+                            className="sr-only"
+                          />
+                          <span
+                            className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
+                              on ? 'border-transparent bg-accent text-white' : 'border-border-strong'
+                            }`}
+                          >
+                            {on && <Check size={11} />}
+                          </span>
+                          <span className="truncate">{permission.label}</span>
+                        </label>
+                      );
+                    })}
+                  </div>
                 )}
-
-                <button
-                  type="button"
-                  onClick={() => void copyInvite(member)}
-                  className="btn-ghost shrink-0 px-3 py-1.5 text-[12px]"
-                >
-                  {copiedId === member.id ? <Check size={13} /> : <Copy size={13} />}
-                  Ссылка
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => void remove(member.id)}
-                  aria-label={`Убрать ${member.name}`}
-                  className="shrink-0 text-text-muted transition-colors hover:text-[color:var(--danger)]"
-                >
-                  <Trash2 size={15} />
-                </button>
               </div>
-
-              <div className="mt-3 grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                {PERMISSIONS.map((permission) => {
-                  const on = member.permissions.includes(permission.key);
-                  return (
-                    <label
-                      key={permission.key}
-                      title={permission.hint}
-                      className={`flex cursor-pointer items-center gap-2.5 rounded-control border px-3 py-2 text-[13px] transition-colors ${
-                        on
-                          ? 'border-[color:var(--accent)] bg-[rgba(59,130,246,0.1)]'
-                          : 'border-border bg-surface-hover hover:bg-surface-raised'
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={on}
-                        onChange={() => void togglePermission(member, permission.key)}
-                        className="sr-only"
-                      />
-                      <span
-                        className={`flex h-4 w-4 shrink-0 items-center justify-center rounded border ${
-                          on ? 'border-transparent bg-accent text-white' : 'border-border-strong'
-                        }`}
-                      >
-                        {on && <Check size={11} />}
-                      </span>
-                      <span className="truncate">{permission.label}</span>
-                    </label>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </>

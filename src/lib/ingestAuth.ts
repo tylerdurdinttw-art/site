@@ -4,7 +4,21 @@ import { prisma } from '@/lib/prisma';
 import { rateLimit } from '@/lib/rateLimit';
 
 const MAX_SKEW_SEC = Number(process.env.INGEST_MAX_SKEW_SEC ?? 60);
-const RATE_LIMIT_PER_MIN = Number(process.env.INGEST_RATE_LIMIT_PER_MIN ?? 60);
+
+/**
+ * Потолок запросов от одного сервера в минуту.
+ *
+ * Прежние 60 плагин выбирал один: позиции раз в 5 секунд — это уже 12, опрос
+ * команд во время проверки идёт раз в 2 секунды — ещё 30, плюс heartbeat, чат
+ * и боевой лог. Упёршись в лимит, панель отвечала 429, и сообщения проверки
+ * уходили в ретраи, а после пяти попыток отбрасывались совсем — при этом
+ * редкий одиночный запрос вроде /ds обычно успевал проскочить. Отсюда и
+ * «во время проверки сообщения не доходят, а дискорд указывается».
+ *
+ * 600 — с запасом на несколько проверок разом; лимит остаётся защитой от
+ * настоящего потока, а не от штатной работы плагина.
+ */
+const RATE_LIMIT_PER_MIN = Number(process.env.INGEST_RATE_LIMIT_PER_MIN ?? 600);
 
 export type AuthFailure = { ok: false; status: number; error: string; retryAfterSec?: number };
 export type AuthSuccess = { ok: true; server: Server; rawBody: string };

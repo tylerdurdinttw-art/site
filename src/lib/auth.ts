@@ -10,6 +10,7 @@ import {
   type SessionUser,
 } from '@/lib/authShared';
 import { packCookie, randomToken, sha256Hex, unpackCookie } from '@/lib/sessionCookie';
+import { canManageProjectUser } from '@/lib/project';
 
 export { hashPassword, verifyPassword } from '@/lib/password';
 
@@ -119,6 +120,17 @@ export async function requireProjectUser(): Promise<SessionUser & { projectId: s
   const user = await requireUser();
   if (!user.projectId) redirect('/welcome');
   return user as SessionUser & { projectId: string };
+}
+
+/**
+ * То же, что requireProjectUser, но ещё и требует роль владельца или второго
+ * владельца: за этим стоят группы «Управление» и «Проект». Чужого уводим на
+ * «Игроков» — раздела для него просто нет, и в меню его тоже не видно.
+ */
+export async function requireProjectManager(): Promise<SessionUser & { projectId: string }> {
+  const user = await requireProjectUser();
+  if (!(await canManageProjectUser(user.projectId, user.id, user.login))) redirect('/players');
+  return user;
 }
 
 /** Гасит текущую сессию: строку из базы и куку. */

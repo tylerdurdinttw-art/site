@@ -62,6 +62,10 @@ export async function POST(req: Request) {
     const ownerSteamId = p.ownerSteamId ?? p.steamId;
     // Команды больше 8 человек в Rust не бывает, но верхнюю границу держим с запасом.
     const teamSize = Math.min(50, Math.max(1, Math.trunc(p.teamSize ?? 1)));
+    // «0» у RelationshipManager значит «команды нет» — такой id хранить незачем,
+    // иначе все одиночки сервера оказались бы в одной общей «команде».
+    const rawTeamId = typeof p.teamId === 'string' ? p.teamId.trim() : '';
+    const teamId = rawTeamId && rawTeamId !== '0' ? rawTeamId.slice(0, 32) : null;
     const language = p.language ? p.language.slice(0, 8).toLowerCase() : null;
 
     const player = await prisma.player.upsert({
@@ -77,6 +81,7 @@ export async function POST(req: Request) {
         ping: p.ping ?? 0,
         isAfk: Boolean(p.isAfk),
         teamSize,
+        teamId,
         language,
         ownerSteamId,
         isFamilyShare: ownerSteamId !== p.steamId,
@@ -93,6 +98,7 @@ export async function POST(req: Request) {
         ping: p.ping ?? 0,
         isAfk: Boolean(p.isAfk),
         teamSize,
+        teamId,
         // Язык приходит не из каждой сборки клиента: пустое значение не затирает известное.
         ...(language ? { language } : {}),
         ownerSteamId,
