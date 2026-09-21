@@ -67,6 +67,41 @@ async function remember(key: string, seed: number, worldSize: number, message: s
   });
 }
 
+/** Заказ генерации процедурной карты. 201 — принято в работу, 409 — уже генерируется. */
+async function requestGeneration(
+  token: string,
+  key: string,
+  seed: number,
+  worldSize: number,
+): Promise<RustMapStatus> {
+  let res: Response;
+  try {
+    res = await withTimeout(`${API_BASE}/maps`, {
+      method: 'POST',
+      headers: { 'X-API-Key': token, 'content-type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify({ size: worldSize, seed, staging: false }),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : 'сеть недоступна';
+    await remember(key, seed, worldSize, message);
+    return { state: 'error', key, message };
+  }
+
+  // 200 — карта уже есть: картинку заберёт следующий запрос, ошибку не запоминаем.
+  if (res.ok || res.status === 409) return { state: 'generating', key };
+
+  if (res.status === 401 || res.status === 403) {
+    const message = 'rustmaps не дал сгенерировать карту: проверьте ключ и лимиты тарифа';
+    await remember(key, seed, worldSize, message);
+    return { state: 'error', key, message };
+  }
+
+  // Кастомную карту (levelurl) по seed не сгенерировать — rustmaps её не знает.
+  const message = `rustmaps не знает карту с таким seed и размером (генерация: ${res.status})`;
+  await remember(key, seed, worldSize, message, true);
+  return { state: 'not_found', key, message };
+}
+
 /**
  * Гарантирует, что картинка карты лежит в базе.
  * Возвращает состояние, чтобы UI мог показать внятную причину, если карты нет.
@@ -89,7 +124,9 @@ export async function ensureRustMap(seed: number, worldSize: number): Promise<Ru
 
   let res: Response;
   try {
-    res = await withTimeout(`${API_BASE}/maps/${seed}/${worldSize}?staging=false`, {
+    // Порядок в пути — сначала размер, потом seed. Наоборот rustmaps отвечает ошибкой,
+    // и панель навсегда застревала на запасном рельефе.
+    res = await withTimeout(`${API_BASE}/maps/${worldSize}/${seed}?staging=false`, {
       headers: { 'X-API-Key': token, accept: 'application/json' },
     });
   } catch (err) {
@@ -109,11 +146,9 @@ export async function ensureRustMap(seed: number, worldSize: number): Promise<Ru
     return { state: 'generating', key };
   }
 
-  if (res.status === 404) {
-    const message = 'rustmaps не знает карту с таким seed и размером';
-    await remember(key, seed, worldSize, message, true);
-    return { state: 'not_found', key, message };
-  }
+  // 404 — процедурную карту с таким seed у них ещё никто не рисовал. Просим сгенерировать:
+  // дальше GET отвечает 409, пока идёт генерация, и 200, когда картинка готова.
+  if (res.status === 404) return requestGeneration(token, key, seed, worldSize);
 
   if (!res.ok) {
     const message = `rustmaps ответил ${res.status}`;
@@ -200,7 +235,7 @@ export async function getCachedImage(key: string) {
 export async function checkRustMapsKey(key: string): Promise<{ ok: boolean; error?: string }> {
   let res: Response;
   try {
-    res = await withTimeout(`${API_BASE}/maps/1337/3500?staging=false`, {
+    res = await withTimeout(`${API_BASE}/maps/3500/1337?staging=false`, {
       headers: { 'X-API-Key': key, accept: 'application/json' },
     });
   } catch (err) {

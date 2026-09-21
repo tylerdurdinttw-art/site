@@ -13,6 +13,8 @@ import {
 } from '@/lib/chatShared';
 
 const REFRESH_MS = 10_000;
+/** Сколько висит строка об отправленном муте. */
+const NOTICE_MS = 6000;
 
 /** Каналы, которые присылает плагин: общий чат, командный и чат-команды. */
 const CHANNEL_OPTIONS: { value: string; label: string }[] = [
@@ -69,6 +71,13 @@ export default function ChatPage() {
   const [draft, setDraft] = useState('');
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const timer = setTimeout(() => setNotice(null), NOTICE_MS);
+    return () => clearTimeout(timer);
+  }, [notice]);
 
   const loadChat = useCallback(async () => {
     try {
@@ -188,6 +197,7 @@ export default function ChatPage() {
           highlightColor={color}
           connected={connected}
           loading={loading}
+          onNotice={setNotice}
         />
 
         {filtersOpen && (
@@ -247,6 +257,12 @@ export default function ChatPage() {
         {sendError && (
           <div className="mt-1.5 text-[12px]" style={{ color: 'var(--danger)' }}>
             {sendError}
+          </div>
+        )}
+
+        {notice && !sendError && (
+          <div className="mt-1.5 text-[12px]" style={{ color: 'var(--success)' }}>
+            {notice}
           </div>
         )}
       </div>

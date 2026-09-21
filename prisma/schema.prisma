@@ -566,10 +566,11 @@ model ServerCommand {
   serverId String
   server   Server @relation(fields: [serverId], references: [id], onDelete: Cascade)
 
-  /// kick | ban | ban_team | check | check_banner | check_banner_hide | check_pm | check_end
+  /// kick | ban | ban_team | check | check_banner | check_banner_hide | check_pm | check_end | mute | unmute
   type    String
   steamId String
-  /// Для kick/ban — причина, для check/check_banner/check_pm — текст для игрока.
+  /// Для kick/ban — причина, для check/check_banner/check_pm — текст для игрока,
+  /// для mute — `<секунды>|<причина>` (плагин получает их раздельно).
   reason  String @default("")
   /// Кто поставил команду: логин сотрудника панели. Плагин подписывает им сообщение
   /// в Discord — «выдал блокировку». null — команду поставил не человек.

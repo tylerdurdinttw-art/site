@@ -230,7 +230,8 @@ export interface PanelCommand {
    * say — реплика панели в общий чат сервера, steamId не используется;
    * check_end — проверка закрыта: снять баннер и перестать следить за игроком;
    * ban_team — бан всей команды игрока;
-   * unban — снятие бана из раздела «Баны».
+   * unban — снятие бана из раздела «Баны»;
+   * mute / unmute — мут в чате из раздела «Чат», выдаёт его плагин Chat.
    */
   type:
     | 'kick'
@@ -244,8 +245,12 @@ export interface PanelCommand {
     | 'check_result'
     | 'check_announce'
     | 'check_end'
+    | 'mute'
+    | 'unmute'
     | 'say';
   steamId: string;
-  /** Для kick/ban — причина, для check/check_banner/check_pm — текст для игрока. */
+  /** Для kick/ban/mute — причина, для check/check_banner/check_pm — текст для игрока. */
   reason: string;
+  /** Только у mute: срок в секундах. */
+  seconds?: number;
 }

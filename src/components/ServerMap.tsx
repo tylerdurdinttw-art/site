@@ -44,6 +44,8 @@ type MapData =
       minHeight: number;
       maxHeight: number;
       heights: string;
+      /** Почему нет картинки rustmaps: generating — она ещё рисуется, стоит перепроверить. */
+      rustmaps?: { state: string; message: string | null };
     }
   | { source: 'unavailable'; serverId: string; reason: string; message: string | null };
 
@@ -54,6 +56,22 @@ interface PlayerPosition {
   y: number;
   z: number;
   isAfk: boolean;
+}
+
+/** Подпись к запасному рельефу: почему вместо картинки rustmaps рисуется сетка высот. */
+function terrainNote(rustmaps: { state: string; message: string | null } | undefined): string {
+  switch (rustmaps?.state) {
+    case 'generating':
+      return 'rustmaps генерирует карту, пока показан рельеф с сервера';
+    case 'no_key':
+      return 'рельеф с сервера: не задан ключ rustmaps (раздел «Разработка»)';
+    case 'no_seed':
+      return 'рельеф с сервера: seed карты ещё неизвестен';
+    default:
+      return rustmaps?.message
+        ? `рельеф с сервера — ${rustmaps.message}`
+        : 'рельеф с сервера, rustmaps недоступен';
+  }
 }
 
 /** Запасная отрисовка: цвет точки по высоте, уровень моря в Rust — 0. */
@@ -125,12 +143,17 @@ export default function ServerMap() {
     void loadMap(serverId);
   }, [serverId, loadMap]);
 
-  // rustmaps ещё готовит карту — вернёмся через полминуты.
+  // rustmaps ещё готовит карту — вернёмся через полминуты. Рельеф на это время лишь
+  // заглушка: как только картинка готова, следующий ответ придёт уже с ней.
+  const generating =
+    map?.source === 'pending' ||
+    (map?.source === 'terrain' && map.rustmaps?.state === 'generating');
+
   useEffect(() => {
-    if (!serverId || map?.source !== 'pending') return;
+    if (!serverId || !generating) return;
     const timer = setTimeout(() => void loadMap(serverId), PENDING_RETRY_MS);
     return () => clearTimeout(timer);
-  }, [serverId, map, loadMap]);
+  }, [serverId, map, generating, loadMap]);
 
   const loadPositions = useCallback(async (id: string) => {
     try {
@@ -248,7 +271,7 @@ export default function ServerMap() {
                 </span>
               ) : null}
               {map?.source === 'terrain' ? (
-                <span className="ml-2">— рельеф с сервера, rustmaps недоступен</span>
+                <span className="ml-2">— {terrainNote(map.rustmaps)}</span>
               ) : null}
             </div>
           </div>
@@ -360,14 +383,18 @@ export default function ServerMap() {
                     className="group absolute z-0 -translate-x-1/2 -translate-y-1/2 hover:z-20"
                     style={{ left: `${p.left}%`, top: `${p.top}%` }}
                   >
+                    {/*
+                      Маркер повторяет форму аватарки Steam — квадрат, без рамки.
+                      От фона карты его отделяет только тень; АФК — полупрозрачный.
+                    */}
                     <div
-                      className="rounded-full border-2 p-[1px] transition-transform group-hover:scale-110"
+                      className="transition-transform group-hover:scale-110"
                       style={{
-                        borderColor: p.isAfk ? 'var(--warning)' : 'var(--accent)',
-                        backgroundColor: 'rgba(8,8,12,0.82)',
+                        opacity: p.isAfk ? 0.55 : 1,
+                        filter: 'drop-shadow(0 1px 2px rgba(0,0,0,0.7))',
                       }}
                     >
-                      <Avatar name={p.name} steamId={p.steamId} size={28} />
+                      <Avatar name={p.name} steamId={p.steamId} size={30} shape="square" />
                     </div>
 
                     <div

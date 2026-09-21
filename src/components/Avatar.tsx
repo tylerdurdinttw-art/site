@@ -19,6 +19,8 @@ interface Props {
   avatarUrl?: string | null;
   status?: PlayerStatus;
   size?: number;
+  /** square — как в самом Steam, без обрезки в круг: так рисуются маркеры на карте. */
+  shape?: 'circle' | 'square';
 }
 
 /**
@@ -29,7 +31,14 @@ interface Props {
  * аватарки грузились через раз. Прямая ссылка остаётся запасным вариантом,
  * а если не сработала и она — рисуется буква.
  */
-export default function Avatar({ name, steamId, avatarUrl, status, size = 36 }: Props) {
+export default function Avatar({
+  name,
+  steamId,
+  avatarUrl,
+  status,
+  size = 36,
+  shape = 'circle',
+}: Props) {
   const proxied = steamId && STEAM_ID_64.test(steamId) ? `/api/avatar/${steamId}` : null;
   const sources = [proxied, avatarUrl].filter((src): src is string => Boolean(src));
 
@@ -39,6 +48,7 @@ export default function Avatar({ name, steamId, avatarUrl, status, size = 36 }: 
 
   const src = sources[attempt] ?? null;
   const dot = Math.max(8, Math.round(size * 0.28));
+  const rounding = shape === 'square' ? 'rounded-[3px]' : 'rounded-full';
 
   return (
     <span className="relative inline-block shrink-0" style={{ width: size, height: size }}>
@@ -54,12 +64,12 @@ export default function Avatar({ name, steamId, avatarUrl, status, size = 36 }: 
           loading="lazy"
           decoding="async"
           onError={() => setAttempt((n) => n + 1)}
-          className="h-full w-full rounded-full bg-surface-hover object-cover"
+          className={`h-full w-full ${rounding} bg-surface-hover object-cover`}
           referrerPolicy="no-referrer"
         />
       ) : (
         <span
-          className="flex h-full w-full items-center justify-center rounded-full bg-surface-hover font-semibold text-text-muted"
+          className={`flex h-full w-full items-center justify-center ${rounding} bg-surface-hover font-semibold text-text-muted`}
           style={{ fontSize: Math.round(size * 0.38) }}
         >
           {name.slice(0, 1).toUpperCase()}

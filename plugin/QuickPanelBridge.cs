@@ -15,13 +15,18 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("QuickPanelBridge", "QuickPanel", "1.6.0")]
+    [Info("QuickPanelBridge", "QuickPanel", "1.7.0")]
     [Description("Мост между игровым сервером Rust и веб-панелью QuickPanel: heartbeat, события, античит-статистика")]
     public class QuickPanelBridge : RustPlugin
     {
         #region Конфиг
 
         private PluginConfig _config;
+
+        /// Муты из раздела «Чат» выдаёт плагин Chat: своих мутов у моста нет, он только
+        /// передаёт ему команды панели через API_MUTE / API_UNMUTE. Нет Chat на сервере —
+        /// мут не выдаётся, а в консоль пишется почему.
+        [PluginReference("Chat")] private Plugin ChatPlugin;
 
         private class AntiCheatConfig
         {
@@ -2207,6 +2212,8 @@ namespace Oxide.Plugins
             /// Логин сотрудника панели, поставившего команду. Им подписано сообщение
             /// в Discord; у панелей старше 1.5.0 поля нет и подпись остаётся общей.
             [JsonProperty("admin")] public string Admin { get; set; }
+            /// Срок мута в секундах — есть только у команды mute.
+            [JsonProperty("seconds")] public int Seconds { get; set; }
         }
 
         private void ExecuteCommand(PanelCommand command)
@@ -2267,6 +2274,12 @@ namespace Oxide.Plugins
                 case "check_end":
                     EndCheck(command.SteamId);
                     break;
+                case "mute":
+                    MuteViaChat(command.SteamId, command.Seconds, command.Reason, command.Admin);
+                    break;
+                case "unmute":
+                    UnmuteViaChat(command.SteamId, command.Admin);
+                    break;
                 default:
                     // Команду всё равно подтверждаем: иначе панель считает её отправленной,
                     // а очередь копит её вечно. Обычно это значит, что на сервере лежит
@@ -2277,6 +2290,68 @@ namespace Oxide.Plugins
             }
 
             Enqueue("/api/ingest/commands/" + command.Id + "/ack", "{}", RequestMethod.POST, null);
+        }
+
+        private const string DefaultMuteReason = "Нарушение правил чата";
+
+        private bool ChatLoaded(string action)
+        {
+            if (ChatPlugin != null && ChatPlugin.IsLoaded) return true;
+
+            PrintWarning(action + ": плагин Chat не загружен, а муты из панели выдаёт он. "
+                + "Положите Chat.cs в oxide/plugins.");
+            return false;
+        }
+
+        /// Мут из панели. Игрока на сервере мутит API плагина Chat; офлайн API не умеет —
+        /// тогда та же работа идёт консольной командой Chat, которая пишет срок прямо
+        /// в его данные (если игрок там уже есть — а раз он писал в чат, он там есть).
+        private void MuteViaChat(string steamId, int seconds, string reason, string admin)
+        {
+            if (!ChatLoaded("Мут из панели")) return;
+
+            ulong userId;
+            if (!ulong.TryParse(steamId, out userId)) return;
+
+            if (seconds <= 0)
+            {
+                PrintWarning("Мут из панели без срока пропущен: " + steamId + ".");
+                return;
+            }
+
+            // Без причины Chat мут не выдаёт.
+            reason = string.IsNullOrEmpty(reason) ? DefaultMuteReason : Sanitize(reason);
+            var by = string.IsNullOrEmpty(admin) ? "панель" : admin;
+
+            var player = FindConnected(steamId);
+            if (player == null)
+            {
+                rust.RunServerCommand("chat.mute", steamId, reason, seconds);
+                Puts("Мут из панели (" + by + "): " + steamId + " не в сети, передан в chat.mute на " + seconds + " с.");
+                return;
+            }
+
+            ChatPlugin.Call("API_MUTE", player, seconds, reason, false);
+
+            // Игроков с правом chat.ignoremuted Chat молча пропускает — скажем об этом явно.
+            if (ChatPlugin.Call("API_CHECK_MUTE_CHAT", userId) as bool? == true)
+                Puts("Мут из панели (" + by + "): " + player.displayName + " на " + seconds + " с — " + reason + ".");
+            else
+                PrintWarning("Мут из панели (" + by + "): Chat не замутил " + player.displayName
+                    + " — скорее всего, у игрока право chat.ignoremuted.");
+        }
+
+        private void UnmuteViaChat(string steamId, string admin)
+        {
+            if (!ChatLoaded("Снятие мута из панели")) return;
+
+            var by = string.IsNullOrEmpty(admin) ? "панель" : admin;
+            var player = FindConnected(steamId);
+
+            if (player != null) ChatPlugin.Call("API_UNMUTE", player, false);
+            else rust.RunServerCommand("chat.unmute", steamId);
+
+            Puts("Снятие мута из панели (" + by + "): " + (player != null ? player.displayName : steamId) + ".");
         }
 
         /// Вызов на проверку: баннер на весь экран поднимается сразу, плюс дубль в чат,

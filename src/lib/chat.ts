@@ -1,6 +1,7 @@
 import { prisma } from '@/lib/prisma';
 import {
   DEFAULT_HIGHLIGHT_COLOR,
+  encodeMuteReason,
   HIGHLIGHT_COLOR_KEY,
   type ChatKeyword,
   type ChatMessage,
@@ -49,6 +50,7 @@ export async function listChatMessages(projectId: string): Promise<ChatMessage[]
         name: m.name ?? m.steamId ?? 'Неизвестный',
         channel: (m.channel ?? 'Global').toUpperCase(),
         message: m.message,
+        serverId: event.serverId,
         serverName: event.server?.name ?? '—',
         timestamp: m.timestamp
           ? new Date(m.timestamp * 1000).toISOString()
@@ -133,6 +135,41 @@ export async function sendChatMessage(
   ]);
 
   return servers.length;
+}
+
+/**
+ * Мут автора сообщения. Выдаёт его плагин Chat на игровом сервере: QuickPanelBridge
+ * получает команду и зовёт API Chat, своих мутов у панели нет. seconds = 0 — снять мут.
+ *
+ * Возвращает false, если сервер не на связи: мут, пришедший через час, уже не нужен.
+ */
+export async function queueMute(
+  projectId: string,
+  serverId: string,
+  steamId: string,
+  seconds: number,
+  reason: string,
+  admin: string,
+): Promise<boolean> {
+  const since = new Date(Date.now() - SERVER_ONLINE_WINDOW_MS);
+  const server = await prisma.server.findFirst({
+    where: { id: serverId, projectId, lastHeartbeatAt: { gte: since } },
+    select: { id: true },
+  });
+  if (!server) return false;
+
+  await prisma.serverCommand.create({
+    data: {
+      projectId,
+      serverId: server.id,
+      steamId,
+      admin,
+      ...(seconds > 0
+        ? { type: 'mute', reason: encodeMuteReason(seconds, reason) }
+        : { type: 'unmute', reason: '' }),
+    },
+  });
+  return true;
 }
 
 export async function listKeywords(projectId: string): Promise<ChatKeyword[]> {

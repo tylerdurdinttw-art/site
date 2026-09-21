@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { authenticateIngest, authErrorResponse } from '@/lib/ingestAuth';
 import { prisma } from '@/lib/prisma';
+import { decodeMuteReason } from '@/lib/chatShared';
 import type { PanelCommand } from '@/lib/types';
 
 export const runtime = 'nodejs';
@@ -27,13 +28,22 @@ export async function GET(req: Request) {
     });
   }
 
-  const commands: PanelCommand[] = rows.map((r) => ({
-    id: r.id,
-    type: r.type as PanelCommand['type'],
-    steamId: r.steamId,
-    reason: r.reason,
-    admin: r.admin,
-  }));
+  const commands: PanelCommand[] = rows.map((r) => {
+    const command: PanelCommand = {
+      id: r.id,
+      type: r.type as PanelCommand['type'],
+      steamId: r.steamId,
+      reason: r.reason,
+      admin: r.admin,
+    };
+    // Срок мута хранится в reason вместе с причиной — плагину отдаём их раздельно.
+    if (r.type === 'mute') {
+      const { seconds, reason } = decodeMuteReason(r.reason);
+      command.seconds = seconds;
+      command.reason = reason;
+    }
+    return command;
+  });
 
   return NextResponse.json({ commands }, { headers: { 'cache-control': 'no-store' } });
 }

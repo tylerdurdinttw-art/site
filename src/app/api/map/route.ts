@@ -55,9 +55,16 @@ export async function GET(req: Request) {
   const seed = server.seed ?? terrain?.seed ?? null;
   const worldSize = server.worldSize ?? terrain?.worldSize ?? null;
 
+  // Почему вместо картинки rustmaps показан рельеф — страница пишет это под названием сервера.
+  let rustmaps: { state: string; message: string | null } = {
+    state: 'no_seed',
+    message: 'сервер ещё не сообщил seed карты',
+  };
+
   // Основной источник — rustmaps по seed + размеру мира.
   if (seed && worldSize) {
     const status = await ensureRustMap(seed, worldSize);
+    rustmaps = { state: status.state, message: 'message' in status ? status.message : null };
 
     if (status.state === 'ready') {
       return NextResponse.json(
@@ -107,8 +114,10 @@ export async function GET(req: Request) {
         minHeight: terrain.minHeight,
         maxHeight: terrain.maxHeight,
         heights: Buffer.from(terrain.heights).toString('base64'),
+        rustmaps,
       },
-      { headers: { 'cache-control': 'private, max-age=300' } },
+      // Не кешируем: пока rustmaps генерирует карту, страница перезапрашивает этот ответ.
+      { headers: { 'cache-control': 'no-store' } },
     );
   }
 
