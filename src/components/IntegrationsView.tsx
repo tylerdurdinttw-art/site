@@ -1,7 +1,7 @@
 'use client';
 
-import { useState } from 'react';
-import { Check, Copy, Plug } from 'lucide-react';
+import { useEffect, useState } from 'react';
+import { Check, Copy, KeyRound, Plug } from 'lucide-react';
 import { Section, SettingsPage } from '@/components/SettingsControls';
 import { APP_NAME } from '@/lib/brand';
 
@@ -58,6 +58,20 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+function CodeBlock({ label, text }: { label: string; text: string }) {
+  return (
+    <div className="rounded-control border border-border bg-bg-sidebar">
+      <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+        <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">{label}</span>
+        <CopyButton text={text} />
+      </div>
+      <pre className="overflow-x-auto scrollbar-thin px-3 py-2.5 font-mono text-[11px] leading-relaxed text-text-muted">
+        {text}
+      </pre>
+    </div>
+  );
+}
+
 function Step({ n, title, children }: { n: number; title: string; children?: React.ReactNode }) {
   return (
     <div className="flex gap-3 rounded-plate bg-surface px-4 py-3">
@@ -72,11 +86,143 @@ function Step({ n, title, children }: { n: number; title: string; children?: Rea
   );
 }
 
+interface KeyState {
+  enabled: boolean;
+  issuedAt: string | null;
+}
+
+/** Бан-лист наружу: ключ API, по которому сайт проекта читает баны. */
+function BanlistApiSection() {
+  const [state, setState] = useState<KeyState | null>(null);
+  const [key, setKey] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [origin, setOrigin] = useState('https://panel.example');
+
+  useEffect(() => {
+    setOrigin(window.location.origin);
+    fetch('/api/integrations/banlist-key', { cache: 'no-store' })
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(String(r.status)))))
+      .then((data: KeyState) => setState(data))
+      .catch(() => setError('Не удалось загрузить состояние ключа.'));
+  }, []);
+
+  const call = async (method: 'POST' | 'DELETE') => {
+    if (method === 'POST' && state?.enabled
+      && !window.confirm('Старый ключ перестанет работать сразу. Перевыпустить?')) return;
+    if (method === 'DELETE'
+      && !window.confirm('Сайт потеряет доступ к бан-листу. Отключить API?')) return;
+
+    setBusy(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/integrations/banlist-key', { method });
+      const data = (await res.json()) as KeyState & { key?: string; error?: string };
+      if (!res.ok) throw new Error(data.error ?? 'Ошибка');
+      setState({ enabled: data.enabled, issuedAt: data.issuedAt });
+      setKey(data.key ?? null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Ошибка');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const shownKey = key ?? 'ВАШ_КЛЮЧ';
+  const example = `curl -H "Authorization: Bearer ${shownKey}" \
+  "${origin}/api/public/bans?status=active&page=1&limit=50"`;
+
+  return (
+    <Section title="API бан-листа">
+      <div className="flex gap-3 rounded-plate bg-surface px-4 py-3">
+        <KeyRound size={15} className="mt-0.5 shrink-0" style={{ color: '#a78bfa' }} />
+        <p className="text-[13px] leading-relaxed text-text-muted">
+          Подключите сайт проекта к бан-листу: по ключу он получает баны только на чтение.
+          IP игроков через API не отдаются. Ключ показывается один раз — сохраните его
+          в конфиге сайта.
+        </p>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-plate bg-surface px-4 py-3">
+        <div className="min-w-0 flex-1 text-[13px]">
+          {state === null
+            ? 'Загрузка…'
+            : state.enabled
+              ? `Ключ выпущен ${new Date(state.issuedAt ?? '').toLocaleString('ru-RU')}`
+              : 'API выключен — ключа нет'}
+        </div>
+        <button
+          type="button"
+          disabled={busy || state === null}
+          onClick={() => void call('POST')}
+          className="btn-primary px-3 py-1.5 text-[12px]"
+        >
+          {state?.enabled ? 'Перевыпустить ключ' : 'Выпустить ключ'}
+        </button>
+        {state?.enabled && (
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void call('DELETE')}
+            className="btn-ghost px-3 py-1.5 text-[12px]"
+          >
+            Отключить
+          </button>
+        )}
+      </div>
+
+      {error && <p className="px-1 text-[12px]" style={{ color: 'var(--danger)' }}>{error}</p>}
+
+      {key && (
+        <div className="rounded-plate bg-surface px-4 py-3">
+          <p className="mb-2 text-[12px] text-text-dim">
+            Новый ключ. После перезагрузки страницы его уже не увидеть.
+          </p>
+          <CodeBlock label="API-ключ" text={key} />
+        </div>
+      )}
+
+      <div className="overflow-hidden rounded-plate bg-surface">
+        <table className="w-full border-collapse text-[12px]">
+          <tbody>
+            {[
+              [
+                'GET /api/public/bans',
+                'Список банов. status=active|lifted|all, search (ник, SteamID, причина), '
+                  + 'server, since (ISO или unix — изменённые после), page, limit ≤ 100',
+              ],
+              ['GET /api/public/bans/<steamId>', 'Забанен ли игрок сейчас и вся его история банов'],
+              ['GET /api/public/bans/stats', 'Сколько банов всего и активных, список серверов'],
+            ].map(([route, what]) => (
+              <tr key={route} className="border-b border-border last:border-b-0">
+                <td className="whitespace-nowrap px-4 py-2.5 align-top font-mono text-[11px] text-text-muted">
+                  {route}
+                </td>
+                <td className="px-4 py-2.5 text-text-muted">{what}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      <div className="pt-1">
+        <CodeBlock label="Пример запроса" text={example} />
+      </div>
+      <p className="px-1 pt-1 text-[12px] leading-relaxed text-text-dim">
+        Ключ передаётся заголовком <span className="font-mono">Authorization: Bearer</span>,{' '}
+        <span className="font-mono">X-Api-Key</span> или параметром{' '}
+        <span className="font-mono">?key=</span>. Лимит — 120 запросов в минуту. Лучше звать API
+        с бэкенда сайта: запрос из браузера покажет ключ любому посетителю.
+      </p>
+    </Section>
+  );
+}
+
 export default function IntegrationsView() {
   return (
     <SettingsPage
       title="Интеграции"
-      note={`Куда ${APP_NAME} отправляет события проекта`}
+      note={`Куда ${APP_NAME} отправляет события проекта и откуда сайт берёт бан-лист`}
     >
       <Section title="Discord">
         <div className="flex gap-3 rounded-plate bg-surface px-4 py-3">
@@ -101,17 +247,7 @@ export default function IntegrationsView() {
             сервере, секция <span className="font-mono text-text-muted">Discord</span>. Пустая
             строка — канал выключен.
           </p>
-          <div className="rounded-control border border-border bg-bg-sidebar">
-            <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
-              <span className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-dim">
-                {CONFIG_PATH}
-              </span>
-              <CopyButton text={SNIPPET} />
-            </div>
-            <pre className="overflow-x-auto scrollbar-thin px-3 py-2.5 font-mono text-[11px] leading-relaxed text-text-muted">
-              {SNIPPET}
-            </pre>
-          </div>
+          <CodeBlock label={CONFIG_PATH} text={SNIPPET} />
         </Step>
 
         <Step n={3} title="Перезагрузите плагин">
@@ -169,6 +305,8 @@ export default function IntegrationsView() {
           <span className="font-mono">0</span> убирает упоминание совсем.
         </p>
       </Section>
+
+      <BanlistApiSection />
     </SettingsPage>
   );
 }

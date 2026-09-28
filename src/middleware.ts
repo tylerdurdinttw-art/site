@@ -22,8 +22,9 @@ const PUBLIC_PAGES = ['/login', '/verify'];
 /**
  * Открытые API. /api/ingest и /api/pair зовёт плагин с игрового сервера:
  * у него своя авторизация — подпись HMAC ключами сервера (см. lib/ingestAuth.ts).
+ * /api/public зовёт сайт проекта — по ключу API (см. lib/publicApi.ts).
  */
-const PUBLIC_API = ['/api/auth/', '/api/ingest/'];
+const PUBLIC_API = ['/api/auth/', '/api/ingest/', '/api/public/'];
 
 function isPublic(pathname: string): boolean {
   if (PUBLIC_PAGES.some((page) => pathname === page || pathname.startsWith(`${page}/`))) return true;
