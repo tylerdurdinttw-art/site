@@ -85,7 +85,14 @@ export async function POST(req: Request, { params }: { params: { id: string } })
   }
 
   // Снимает баннер с экрана и выводит игрока из списка «под проверкой» в плагине.
-  await queueCommand(projectId, check.serverId, 'check_end', check.steamId, '');
+  // «passed» плагин запоминает: меню репортов покажет на игроке плашку «проверен недавно».
+  await queueCommand(
+    projectId,
+    check.serverId,
+    'check_end',
+    check.steamId,
+    outcome === 'passed' ? 'passed' : '',
+  );
 
   // Итог остаётся в переписке проверки — видно, что именно ушло игроку.
   await prisma.checkMessage.create({

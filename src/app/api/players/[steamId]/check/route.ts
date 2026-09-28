@@ -76,8 +76,8 @@ export async function POST(_req: Request, { params }: { params: { steamId: strin
     );
   }
 
-  // Команда `check` сразу показывает баннер на весь экран и дублирует вызов в чат,
-  // поэтому проверка стартует с уже поднятым баннером — отдельная кнопка не нужна.
+  // Команда `check` только пишет вызов в чат игрока. Баннер на весь экран модератор
+  // поднимает сам кнопкой «Показать табличку» — если игрок не заметил сообщение.
   const check = await prisma.playerCheck.create({
     data: {
       projectId,
@@ -87,7 +87,7 @@ export async function POST(_req: Request, { params }: { params: { steamId: strin
       name: player.name,
       // В журнале проверки должно быть видно, кто именно вызвал игрока.
       admin: ctx.user.login,
-      bannerVisible: true,
+      bannerVisible: false,
     },
   });
 

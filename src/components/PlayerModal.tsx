@@ -312,6 +312,21 @@ export default function PlayerModal({ steamId, onClose }: Props) {
             </div>
           </div>
 
+          {data && (
+            <div className="mt-3">
+              <span
+                className="inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium"
+                style={
+                  data.clientType === 'pirate'
+                    ? { color: 'var(--danger)', background: 'rgba(239, 68, 68, 0.12)' }
+                    : { color: 'var(--success)', background: 'rgba(34, 197, 94, 0.12)' }
+                }
+              >
+                {data.clientType === 'pirate' ? 'Пират' : 'Лицензия'}
+              </span>
+            </div>
+          )}
+
           <div className="mt-4 flex gap-2">
             <a
               href={`https://steamcommunity.com/profiles/${steamId}`}

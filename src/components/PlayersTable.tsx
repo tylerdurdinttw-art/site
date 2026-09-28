@@ -101,7 +101,13 @@ export default function PlayersTable({ players, loading, onSelect }: Props) {
                       status={p.status}
                     />
                     <div className="min-w-0">
-                      <div className="truncate text-[14px] font-semibold">{p.name}</div>
+                      <div
+                        className="truncate text-[14px] font-semibold"
+                        style={p.clientType === 'pirate' ? { color: 'var(--danger)' } : undefined}
+                        title={p.clientType === 'pirate' ? 'Пиратский клиент' : undefined}
+                      >
+                        {p.name}
+                      </div>
                       <div className="text-[12px] text-text-muted">{STATUS_LABEL[p.status]}</div>
                     </div>
                   </div>

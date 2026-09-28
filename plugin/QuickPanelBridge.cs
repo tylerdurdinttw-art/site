@@ -15,7 +15,7 @@ using Time = UnityEngine.Time;
 
 namespace Oxide.Plugins
 {
-    [Info("QuickPanelBridge", "QuickPanel", "1.7.0")]
+    [Info("QuickPanelBridge", "QuickPanel", "1.8.0")]
     [Description("Мост между игровым сервером Rust и веб-панелью QuickPanel: heartbeat, события, античит-статистика")]
     public class QuickPanelBridge : RustPlugin
     {
@@ -47,6 +47,9 @@ namespace Oxide.Plugins
             [JsonProperty("CooldownSec")] public int CooldownSec { get; set; } = 600;
             /// Аватарки в меню рисует сам клиент по SteamID. Выключите, если они мешают.
             [JsonProperty("LoadAvatars")] public bool LoadAvatars { get; set; } = true;
+            /// Сколько часов после пройденной проверки игрок считается «проверен недавно»:
+            /// меню репортов (Menu.cs) показывает на его карточке плашку. 0 — не показывать.
+            [JsonProperty("RecentlyCheckedHours")] public int RecentlyCheckedHours { get; set; } = 24;
             /// Replace обязателен: по умолчанию Newtonsoft не создаёт список заново, а дописывает
             /// в уже существующий — тот, что задан здесь инициализатором. Без него причины из файла
             /// прибавлялись бы к пяти стандартным на каждой загрузке, и конфиг рос бы с каждым reload.
@@ -89,6 +92,21 @@ namespace Oxide.Plugins
             [JsonProperty("ShowAvatars")] public bool ShowAvatars { get; set; } = true;
         }
 
+        /// Откуда брать пометку «пират / лицензия». Сам мост отличает пирата только по
+        /// SteamID вне диапазона Steam — этого мало: многие пиратские клиенты подставляют
+        /// валидный ID. Поэтому ответ можно взять у другого плагина, который это умеет.
+        private class PirateCheckConfig
+        {
+            /// Имя плагина, как в oxide/plugins без .cs. Пусто — только проверка по SteamID.
+            [JsonProperty("Plugin")] public string Plugin { get; set; } = "";
+            /// Метод API этого плагина. Вызывается с SteamID (ulong, если не принял — string)
+            /// и должен вернуть bool.
+            [JsonProperty("Method")] public string Method { get; set; } = "";
+            /// true — метод отвечает true для пирата (IsPirate, IsNoSteam);
+            /// false — отвечает true для лицензии (IsSteam, HasLicense).
+            [JsonProperty("TrueMeansPirate")] public bool TrueMeansPirate { get; set; } = true;
+        }
+
         private class PluginConfig
         {
             // Адрес панели. Если она развёрнута не на localhost — поправьте здесь один раз
@@ -110,6 +128,7 @@ namespace Oxide.Plugins
             [JsonProperty("AntiCheat")] public AntiCheatConfig AntiCheat { get; set; } = new AntiCheatConfig();
             [JsonProperty("Reports")] public ReportsConfig Reports { get; set; } = new ReportsConfig();
             [JsonProperty("Discord")] public DiscordConfig Discord { get; set; } = new DiscordConfig();
+            [JsonProperty("PirateCheck")] public PirateCheckConfig PirateCheck { get; set; } = new PirateCheckConfig();
         }
 
         protected override void LoadDefaultConfig() => _config = new PluginConfig();
@@ -132,6 +151,7 @@ namespace Oxide.Plugins
                         .ToList();
                 // Секция появилась в 1.4.0 — у старых конфигов её нет, дописываем пустую.
                 if (_config.Discord == null) _config.Discord = new DiscordConfig();
+                if (_config.PirateCheck == null) _config.PirateCheck = new PirateCheckConfig();
             }
             catch
             {
@@ -197,6 +217,39 @@ namespace Oxide.Plugins
         // Игроки, по которым панель ведёт проверку: их сообщения уходят без задержки,
         // а очередь команд опрашивается чаще. Заполняется командами check/check_banner.
         private readonly HashSet<ulong> _checked = new HashSet<ulong>();
+
+        /// Когда игрок последний раз прошёл проверку (unix-секунды). Лежит в data-файле,
+        /// чтобы плашка «проверен недавно» переживала перезагрузку плагина и рестарт.
+        private Dictionary<ulong, long> _checkPassed = new Dictionary<ulong, long>();
+        private const string CheckPassedDataFile = "QuickPanelBridge_CheckPassed";
+
+        private void LoadCheckPassed()
+        {
+            try
+            {
+                _checkPassed = Interface.Oxide.DataFileSystem.ReadObject<Dictionary<ulong, long>>(CheckPassedDataFile)
+                               ?? new Dictionary<ulong, long>();
+            }
+            catch
+            {
+                _checkPassed = new Dictionary<ulong, long>();
+            }
+        }
+
+        private void MarkCheckPassed(string steamId)
+        {
+            ulong userId;
+            if (!ulong.TryParse(steamId, out userId)) return;
+
+            var now = Now();
+            _checkPassed[userId] = now;
+
+            // Старше недели — уже никому не интересно; чистим, чтобы файл не рос вечно.
+            var stale = _checkPassed.Where(pair => now - pair.Value > 7 * 86400L).Select(pair => pair.Key).ToList();
+            foreach (var id in stale) _checkPassed.Remove(id);
+
+            Interface.Oxide.DataFileSystem.WriteObject(CheckPassedDataFile, _checkPassed);
+        }
         // На чьих экранах сейчас висит баннер — чтобы снять его при выгрузке плагина.
         private readonly HashSet<ulong> _banners = new HashSet<ulong>();
         // Текущий интервал опроса команд, чтобы не пересоздавать таймер на каждой команде.
@@ -282,6 +335,7 @@ namespace Oxide.Plugins
         private void Init()
         {
             permission.RegisterPermission(PermAdmin, this);
+            LoadCheckPassed();
 
             // Имя команды настраивается: на сервере уже может жить чужой /report.
             var reportCommand = (_config.Reports.Command ?? "").Trim().TrimStart('/');
@@ -444,7 +498,7 @@ namespace Oxide.Plugins
                 ["ping"] = GetPing(player),
                 ["ownerSteamId"] = info.OwnerId == 0UL ? player.UserIDString : info.OwnerId.ToString(),
                 ["familyShare"] = info.FamilyShare,
-                ["licensed"] = info.Licensed,
+                ["licensed"] = ResolveLicensed(player.userID),
                 ["authLevel"] = info.AuthLevel
             });
         }
@@ -603,6 +657,30 @@ namespace Oxide.Plugins
         /// куда ведут F7 и /report. Прямой вызов SendEvent("player_reported") в обход
         /// этого метода кладёт жалобу только в панель — в Discord не уходит ничего,
         /// и молча: вся диагностика вебхука живёт дальше по пути.
+        /// Прошёл ли игрок проверку за последние Reports.RecentlyCheckedHours часов.
+        /// Этим меню репортов (Menu.cs) рисует плашку «проверен недавно».
+        [HookMethod("API_IsRecentlyChecked")]
+        public bool API_IsRecentlyChecked(string steamId)
+        {
+            var hours = _config.Reports.RecentlyCheckedHours;
+            ulong userId;
+            if (hours <= 0 || !ulong.TryParse(steamId, out userId)) return false;
+
+            long at;
+            if (!_checkPassed.TryGetValue(userId, out at)) return false;
+            return Now() - at < hours * 3600L;
+        }
+
+        /// Сколько секунд назад игрок прошёл проверку; -1 — не проходил или запись протухла.
+        [HookMethod("API_GetCheckPassedAgo")]
+        public int API_GetCheckPassedAgo(string steamId)
+        {
+            ulong userId;
+            long at;
+            if (!ulong.TryParse(steamId, out userId) || !_checkPassed.TryGetValue(userId, out at)) return -1;
+            return (int)Math.Max(0, Now() - at);
+        }
+
         [HookMethod("SendPlayerReport")]
         public bool SendPlayerReport(BasePlayer reporter, string targetId, string targetName,
             string subject, string message, string type)
@@ -2005,7 +2083,7 @@ namespace Oxide.Plugins
                     ["language"] = GetLanguage(player),
                     ["ownerSteamId"] = info.OwnerId == 0UL ? player.UserIDString : info.OwnerId.ToString(),
                     ["familyShare"] = info.FamilyShare,
-                    ["licensed"] = info.Licensed,
+                    ["licensed"] = ResolveLicensed(player.userID),
                     ["authLevel"] = info.AuthLevel
                 });
             }
@@ -2273,6 +2351,8 @@ namespace Oxide.Plugins
                     break;
                 case "check_end":
                     EndCheck(command.SteamId);
+                    // Панель 1.8+ кладёт исход в reason: «passed» — проверку прошёл.
+                    if (command.Reason == "passed") MarkCheckPassed(command.SteamId);
                     break;
                 case "mute":
                     MuteViaChat(command.SteamId, command.Seconds, command.Reason, command.Admin);
@@ -2354,8 +2434,8 @@ namespace Oxide.Plugins
             Puts("Снятие мута из панели (" + by + "): " + (player != null ? player.displayName : steamId) + ".");
         }
 
-        /// Вызов на проверку: баннер на весь экран поднимается сразу, плюс дубль в чат,
-        /// чтобы текст остался в истории после того, как баннер снимут.
+        /// Вызов на проверку: сообщение в чат игрока. Баннер на весь экран отдельно —
+        /// его поднимает модератор из панели, если игрок не отреагировал на чат.
         /// Панель ставит команду только для игрока в сети, поэтому промах — редкий случай:
         /// команда всё равно подтверждается, повторов очередь не делает.
         private void ShowCheckWarning(string steamId, string message)
@@ -2367,7 +2447,8 @@ namespace Oxide.Plugins
                 return;
             }
 
-            ShowCheckBanner(steamId, null);
+            // Баннер на весь экран сразу не поднимаем: его выводит модератор кнопкой
+            // «Показать табличку» (команда check_banner), если игрок не заметил чат.
             SendReply(player, "<color=#ef4444>ПРОВЕРКА</color> " + message);
         }
 
@@ -3385,30 +3466,130 @@ namespace Oxide.Plugins
                 };
             }
 
-            var body = JsonConvert.SerializeObject(payload);
+            _discordQueue.Add(new DiscordMessage
+            {
+                Url = webhookUrl,
+                Body = JsonConvert.SerializeObject(payload),
+                OnDone = onDone
+            });
+            PumpDiscord();
+        }
+
+        /// Пауза между сообщениями. Discord пускает в вебхук примерно 5 запросов за 2 секунды
+        /// и около 30 в минуту на канал: бан тимы или пачка репортов, отправленные разом,
+        /// упирались в 429 и терялись. Теперь сообщения уходят по одному.
+        private const float DiscordGapSec = 1.2f;
+        /// Сколько раз повторяем сообщение, получившее 429 или сетевой сбой.
+        private const int DiscordMaxAttempts = 5;
+        /// Больше этого очередь не растёт: при долгой недоступности Discord старое выкидываем.
+        private const int DiscordMaxQueue = 200;
+
+        private class DiscordMessage
+        {
+            public string Url;
+            public string Body;
+            public Action<int, string> OnDone;
+            public int Attempts;
+        }
+
+        private readonly List<DiscordMessage> _discordQueue = new List<DiscordMessage>();
+        private bool _discordBusy;
+        private bool _discordTimerSet;
+        /// Раньше этого момента (realtimeSinceStartup) следующий запрос не уходит.
+        private float _discordNextAt;
+
+        private void PumpDiscord()
+        {
+            if (_discordBusy || _discordTimerSet || _discordQueue.Count == 0) return;
+
+            while (_discordQueue.Count > DiscordMaxQueue) _discordQueue.RemoveAt(0);
+
+            var wait = _discordNextAt - Time.realtimeSinceStartup;
+            if (wait > 0f)
+            {
+                _discordTimerSet = true;
+                timer.Once(wait, () =>
+                {
+                    _discordTimerSet = false;
+                    PumpDiscord();
+                });
+                return;
+            }
+
+            var message = _discordQueue[0];
+            _discordBusy = true;
+            message.Attempts++;
 
             var headers = new Dictionary<string, string> { ["Content-Type"] = "application/json" };
 
-            webrequest.Enqueue(webhookUrl, body, (code, response) =>
+            webrequest.Enqueue(message.Url, message.Body, (code, response) =>
             {
-                // Проверка вебхука ждёт ответа в любом случае — даже успешного, о котором
-                // обычная отправка молчит.
-                if (onDone != null) onDone(code, response);
+                _discordBusy = false;
+                _discordNextAt = Time.realtimeSinceStartup + DiscordGapSec;
 
-                // Вебхук отвечает 204 без тела; всё остальное стоит показать администратору.
-                if (code >= 200 && code < 300) return;
-
-                if (code == 401 || code == 403 || code == 404)
-                    PrintWarning("Discord: вебхука больше нет (код " + code
-                                 + "). Создайте его заново в настройках канала и впишите новый адрес в конфиг.");
-                else if (code == 429)
-                    PrintWarning("Discord: слишком часто (429), сообщение придержано.");
-                else if (code == 0)
-                    PrintWarning("Discord: нет ответа. С этого сервера не открывается discord.com — "
-                                 + "проверьте блокировки и фаервол.");
+                // 429 и сетевой сбой — повторяем то же сообщение, остальное снимаем с очереди.
+                var retry = (code == 429 || code == 0) && message.Attempts < DiscordMaxAttempts;
+                if (retry)
+                {
+                    // Discord сам говорит, сколько ждать: retry_after в секундах.
+                    if (code == 429)
+                        _discordNextAt = Time.realtimeSinceStartup + ParseRetryAfter(response) + 0.25f;
+                    else
+                        _discordNextAt = Time.realtimeSinceStartup + 5f * message.Attempts;
+                }
                 else
-                    PrintWarning("Discord: код " + code + ". " + Trim(response ?? "", 200));
+                {
+                    _discordQueue.Remove(message);
+                    ReportDiscordResult(message, code, response);
+                }
+
+                PumpDiscord();
             }, this, RequestMethod.POST, headers, 10f);
+        }
+
+        private void ReportDiscordResult(DiscordMessage message, int code, string response)
+        {
+            // Проверка вебхука ждёт ответа в любом случае — даже успешного, о котором
+            // обычная отправка молчит.
+            if (message.OnDone != null) message.OnDone(code, response);
+
+            // Вебхук отвечает 204 без тела; всё остальное стоит показать администратору.
+            if (code >= 200 && code < 300) return;
+
+            if (code == 401 || code == 403 || code == 404)
+                PrintWarning("Discord: вебхука больше нет (код " + code
+                             + "). Создайте его заново в настройках канала и впишите новый адрес в конфиг.");
+            else if (code == 429)
+                PrintWarning("Discord: слишком часто (429) даже после " + message.Attempts
+                             + " попыток, сообщение пропущено.");
+            else if (code == 0)
+                PrintWarning("Discord: нет ответа. С этого сервера не открывается discord.com — "
+                             + "проверьте блокировки и фаервол.");
+            else
+                PrintWarning("Discord: код " + code + ". " + Trim(response ?? "", 200));
+        }
+
+        /// retry_after из тела ответа 429. Не разобрали — ждём 2 секунды.
+        private static float ParseRetryAfter(string response)
+        {
+            try
+            {
+                var data = JsonConvert.DeserializeObject<Dictionary<string, object>>(response ?? "");
+                object value;
+                if (data != null && data.TryGetValue("retry_after", out value) && value != null)
+                {
+                    var seconds = Convert.ToSingle(value, CultureInfo.InvariantCulture);
+                    // Старые версии API отдавали миллисекунды.
+                    if (seconds > 60f) seconds /= 1000f;
+                    return Mathf.Clamp(seconds, 0.5f, 60f);
+                }
+            }
+            catch
+            {
+                // Тело не JSON (прокси, Cloudflare) — берём паузу по умолчанию.
+            }
+
+            return 2f;
         }
 
         #endregion
@@ -3428,6 +3609,49 @@ namespace Oxide.Plugins
         private static bool IsLicensedSteamId(ulong steamId)
         {
             return steamId >= 76561197960265728UL && steamId <= 76561202255233023UL;
+        }
+
+        private bool _pirateSourceWarned;
+
+        /// Лицензия ли у игрока. Если в конфиге указан плагин-источник и он ответил —
+        /// верим ему; иначе (не указан, не загружен, вернул не bool) — проверка по SteamID.
+        /// Пиратский ID вне диапазона Steam остаётся пиратским при любом ответе.
+        private bool ResolveLicensed(ulong steamId)
+        {
+            if (!IsLicensedSteamId(steamId)) return false;
+
+            var source = _config.PirateCheck;
+            if (source == null || string.IsNullOrEmpty(source.Plugin) || string.IsNullOrEmpty(source.Method))
+                return true;
+
+            var plugin = plugins.Find(source.Plugin);
+            if (plugin == null || !plugin.IsLoaded)
+            {
+                if (!_pirateSourceWarned)
+                {
+                    _pirateSourceWarned = true;
+                    PrintWarning("PirateCheck: плагин " + source.Plugin
+                                 + " не загружен, пиратов определяю только по SteamID.");
+                }
+                return true;
+            }
+            _pirateSourceWarned = false;
+
+            object result;
+            try
+            {
+                result = plugin.Call(source.Method, steamId);
+                if (!(result is bool)) result = plugin.Call(source.Method, steamId.ToString());
+            }
+            catch (Exception ex)
+            {
+                PrintWarning("PirateCheck: " + source.Plugin + "." + source.Method + " упал: " + ex.Message);
+                return true;
+            }
+
+            if (!(result is bool)) return true;
+            var flag = (bool)result;
+            return source.TrueMeansPirate ? !flag : flag;
         }
 
         /// Очередь на вход: joining — кто уже подключается, остальные ждут.
